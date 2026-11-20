@@ -2,7 +2,7 @@
 // Output: a USD price for every currency that has a usable route.
 // Ported from Verus Mobile (onChainPriceMath.js); one pass prices all currencies.
 
-import { ONE, div, mul, positive } from './decimal.js';
+import { ONE, div, format, mul, parse, positive } from './decimal.js';
 
 // CCurrencyState flags: PRELAUNCH = 2, REFUNDING = 4.
 const NOT_LIVE = 2 | 4;
@@ -44,7 +44,9 @@ function ownStateRoute(basket, native, anchor, nativeUsd) {
 
 // A reserve currency takes its price from the basket with the largest
 // reserve of the reference currency (native first, then anchor).
-function reserveRoute(currencyId, baskets, referenceId, referenceUsd) {
+// `toNative` converts that reserve to native units; the route needs at least
+// `minReserve` native units (0 = no minimum).
+function reserveRoute(currencyId, baskets, referenceId, referenceUsd, toNative, minReserve) {
   if (!referenceUsd) return null;
   let best = null;
   for (const basket of baskets) {
@@ -60,7 +62,10 @@ function reserveRoute(currencyId, baskets, referenceId, referenceUsd) {
       basket: basket.currencyid,
     };
   }
-  return best && { usd: best.usd, basket: best.basket, via: referenceId };
+  if (!best) return null;
+  const nativeReserve = toNative(best.amount);
+  if (nativeReserve === null || nativeReserve < minReserve) return null;
+  return { usd: best.usd, basket: best.basket, via: referenceId, nativeReserve };
 }
 
 /**
@@ -70,9 +75,14 @@ function reserveRoute(currencyId, baskets, referenceId, referenceUsd) {
  * @param {string} input.anchor     dollar anchor id (= 1 USD)
  * @param {string} [input.anchorBasket] basket that sets the native USD price
  * @param {bigint} [input.nativeUsd] native USD price when it comes from another chain
+ * @param {number|string} [input.minRouteReserve] minimum native reserve of a reserve-route basket
  * @returns {{ nativeUsd: bigint|null, prices: Map<string, {name: string, usd: bigint, route: object}> }}
  */
-export function computePrices({ baskets, native, anchor, anchorBasket, nativeUsd }) {
+export function computePrices({
+  baskets, native, anchor, anchorBasket, nativeUsd, minRouteReserve = 0,
+}) {
+  const minReserve = parse(minRouteReserve);
+  if (minReserve === null) throw new Error('minRouteReserve must be a non-negative decimal');
   const list = (Array.isArray(baskets) ? baskets : [])
     .filter((b) => b && typeof b === 'object' && typeof b.currencyid === 'string');
 
@@ -120,10 +130,17 @@ export function computePrices({ baskets, native, anchor, anchorBasket, nativeUsd
       if (typeof reserve?.currencyid === 'string') reserveIds.add(reserve.currencyid);
     }
   }
+  // An anchor reserve is worth anchor / nativeUsd native units (anchor = 1 USD).
+  const anchorToNative = (amount) => (usdNative ? div(amount, usdNative) : null);
   for (const id of reserveIds) {
     if (id === native || id === anchor || basketIds.has(id)) continue;
-    const route = reserveRoute(id, list, native, usdNative) || reserveRoute(id, list, anchor, ONE);
-    if (route) put(id, route.usd, { type: 'reserve', basket: route.basket, via: route.via });
+    const route = reserveRoute(id, list, native, usdNative, (amount) => amount, minReserve)
+      || reserveRoute(id, list, anchor, ONE, anchorToNative, minReserve);
+    if (route) {
+      put(id, route.usd, {
+        type: 'reserve', basket: route.basket, via: route.via, nativeReserve: format(route.nativeReserve),
+      });
+    }
   }
 
   return { nativeUsd: usdNative, prices };

@@ -68,6 +68,30 @@ test('a reserve currency takes its price from the basket with the largest native
   assert.equal(prices.get(T).route.basket, 'iLARGE');
 });
 
+test('a thin basket does not set a reserve price; 0 turns the minimum off', () => {
+  const thin = basket('iTHIN', [reserve(N, 1, 10), reserve(T, 0.01)]); // T = 100 native = 400 USD
+  const thick = basket('iTHICK', [reserve(N, 1, 5000), reserve(T, 0.5)]); // T = 2 native = 8 USD
+  const run = (baskets, minRouteReserve) => computePrices({
+    baskets: [anchorBasket, ...baskets], native: N, anchor: A, anchorBasket: 'iANCHORBASKET', minRouteReserve,
+  }).prices;
+
+  const thinOnly = run([thin], 1000);
+  assert.equal(thinOnly.has(T), false);
+  assert.equal(format(thinOnly.get('iTHIN').usd), '4'); // the basket's own price stays: 1 native * 4 USD
+  assert.equal(format(run([thin], 0).get(T).usd), '400');
+
+  const both = run([thin, thick], 1000).get(T);
+  assert.equal(format(both.usd), '8');
+  assert.deepEqual(both.route, { type: 'reserve', basket: 'iTHICK', via: N, nativeReserve: '5000' });
+
+  // Anchor route: 8000 anchor units at 4 USD per native = 2000 native; 2000 units = 500 native.
+  const anchorRich = basket('iUSD8000', [reserve(A, 1, 8000), reserve(T, 0.25)]); // T = 4 USD
+  const anchorThin = basket('iUSD2000', [reserve(A, 1, 2000), reserve(T, 0.25)]);
+  assert.equal(format(run([anchorRich], 1000).get(T).usd), '4');
+  assert.equal(run([anchorRich], 1000).get(T).route.nativeReserve, '2000');
+  assert.equal(run([anchorThin], 1000).has(T), false);
+});
+
 test('bad basket data gives no price and does not throw', () => {
   const cases = {
     zeroPrice: basket('iB1', [reserve(N, 1), reserve(T, 0)]),

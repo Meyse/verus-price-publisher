@@ -8,10 +8,17 @@ Wallets download that one file. The load on the node is constant: it does not gr
 the number of wallets.
 
 - Plain JavaScript (Node.js 20 or newer). **No runtime dependencies**, no build step.
-  About 700 lines in `src/`.
+  About 750 lines in `src/`.
 - Read-only RPC: an allow-list of five methods. Any other method is refused in code.
 - RPC credentials come from the daemon conf file or environment variables. They are
   never logged and never written to the output.
+- A thin basket cannot set the price of another currency: a reserve route needs at least
+  `minRouteReserve` (default 1,000) native coins in the basket.
+- **Frozen baskets look like quiet baskets.** On 2026-11-20 all 27 mainnet basket states
+  were unchanged over blocks 4330959 to 4330965, and the 4 known baskets (Bridge.vETH,
+  Pure, Kaiju, Switch) were also unchanged since block 4330936. The service cannot tell a
+  frozen basket from one that simply had no conversions. It publishes the last on-chain
+  price with a fresh block height.
 
 ### Basket discovery and its cost (read this first)
 
@@ -114,10 +121,25 @@ docker run -d --name verus-prices --network host \
   verus-price-publisher --chain VRSC
 ```
 
-`--network host` lets the container reach the daemon on `127.0.0.1`. The output goes to
-`/data` (`OUT_DIR`). To use the built-in HTTP server in the container, add
-`-e HTTP_PORT=8080 -e HTTP_HOST=0.0.0.0` and put it behind your reverse proxy. The data
-folder must be writable by the container's `node` user (uid 1000).
+On Linux, `--network host` lets the container reach the daemon on `127.0.0.1`, and the
+read-only conf mount gives it the credentials. The output goes to `/data` (`OUT_DIR`). To
+use the built-in HTTP server in the container, add `-e HTTP_PORT=8080 -e HTTP_HOST=0.0.0.0`
+and put it behind your reverse proxy. The data folder must be writable by the container's
+`node` user (uid 1000).
+
+On Docker Desktop (macOS, Windows), `--network host` does not reach the host's
+`127.0.0.1` by default. Use `host.docker.internal` and pass the credentials in an env file
+(mode 600), because the service sends conf-file credentials only to a local address:
+
+```sh
+# rpc.env holds two lines: VERUS_RPC_USER=... and VERUS_RPC_PASSWORD=...
+docker run -d --name verus-prices --env-file rpc.env \
+  -e VERUS_RPC_URL=http://host.docker.internal:27486 \
+  -v /path/to/out:/data verus-price-publisher --chain VRSC
+```
+
+Environment variables are visible to anyone who can run `docker inspect` on the host.
+The conf-file mount does not have that exposure.
 
 ## Configuration
 
@@ -140,6 +162,7 @@ the defaults.
 | `minIntervalSeconds` | 60 | Minimum time between two cycles. |
 | `basketListSeconds` | 3600 | How often to refresh the basket list (minimum 60). |
 | `maxAgeSeconds` | 900 | Copied into the file as `maxAge`: the age after which clients should not show the prices. |
+| `minRouteReserve` | 1000 | Minimum native reserve (in native coins, for example VRSC) of a basket that sets the price of a reserve currency (price rule 4). `0` turns it off. |
 | `http` | `null` (off) | `{ "host": "127.0.0.1", "port": 8080 }` to serve the file from the service itself. |
 | `pbaas` | `[]` | Extra PBaaS chains, see below. **Not verified** (no PBaaS daemon was available). |
 
@@ -240,6 +263,7 @@ Or turn on the built-in server (`http` in the config) and proxy to it. It serves
 | `route.type` | `anchor` (fixed 1), `native` (from the anchor basket), `basket` (the basket's own state), `reserve` (a reserve of `route.basket`). |
 | `route.basket` | The basket whose state gave the price. |
 | `route.via` | The reference currency: the native coin or the anchor. |
+| `route.nativeReserve` | Only for `reserve` routes: the route basket's reserve in native units, a decimal string (12 significant digits). A wallet can apply a stricter limit than `minRouteReserve`. |
 | `route.system` | Only for prices from a PBaaS chain: that chain's id. |
 | `systems` | Only when PBaaS chains are configured: `{ name, id, height, blockTime }` for each chain read in this cycle. |
 
@@ -258,6 +282,10 @@ come from JSON numbers, so they keep about 15 to 16 significant digits (the daem
 4. Any other reserve currency C: of the baskets that hold C and the native, take the one
    with the largest native reserve; USD = `priceinreserve[native] / priceinreserve[C] × native USD`.
    If none holds the native, use the basket with the largest anchor reserve the same way.
+   The chosen basket must hold at least `minRouteReserve` native units (default 1,000).
+   For an anchor route the anchor reserve counts as `anchor reserve / native USD` native
+   units. If the largest basket is too thin, C gets no price. This rule does not apply to
+   rules 1 to 3. `0` turns it off.
 5. Bad data gives no price and no error: zero, negative, missing or non-numeric
    `priceinreserve`, zero supply, pre-launch or refunding baskets.
 6. Only baskets whose `systemid` is the chain itself are used. A basket from another
@@ -297,30 +325,50 @@ come from JSON numbers, so they keep about 15 to 16 significant digits (the daem
 - In "auto" mode some reserve prices come from a different basket than with the fixed list,
   because a basket with a larger VRSC reserve holds them: vETH (NATI🦉, −0.08 %),
   vUSDC.vETH (Floralis, −0.41 %), vUSDT.vETH (Floralis, +0.05 %), EURC.vETH (Floralis, −0.03 %).
-- Basket states on 2026-11-20: all 27 mainnet basket states were identical over the 7 blocks
-  of the test, and the 4 known baskets were also identical to the public API read 29 blocks
-  earlier. The prices did not move (frozen baskets).
-- Not verified: PBaaS chains, Docker image (not built), systemd unit.
+- Basket states on 2026-11-20: all 27 mainnet basket states (reserves, prices, supply and
+  conversion fields) were identical at blocks 4330959, 4330961, 4330963 and 4330965. The 4
+  known baskets were also identical to the public API read at block 4330936. The other 23
+  were not read at 4330936. The prices did not move (frozen baskets).
+- `minRouteReserve` 1,000 on mainnet (block 4330974 and one new block): 41 prices instead of
+  50, no other price changed. The 9 without a price: Bears, Bulls (Traders, 336 VRSC),
+  bitcoins (🟠, 100 VRSC), Bridge.CHIPS, Bridge.vARRR, Bridge.vDEX (Ⓐ, 307 VRSC),
+  pepecoin.vETH (Kek🐸, 535 VRSC), vLINK.vETH, vwBTC.vETH (motb, 715 VRSC). On VRSCTEST:
+  111 prices instead of 137.
+- Docker (Docker Desktop 29.9.3 on macOS, 2026-11-20): the image builds (node:22-alpine,
+  234 MB, only `src/`, `package.json` and `LICENSE`, runs as uid 1000). A container against a
+  VRSCTEST daemon through `host.docker.internal` with an env file published a new block
+  (1326866, 111 prices) to `/data/v1/prices.json` and served it (200, CORS,
+  `Cache-Control`; POST got 405). On Docker Desktop, `--network host` could not reach the host,
+  and the conf-file credentials were refused for `host.docker.internal` as designed. The
+  Linux `--network host` command above is not verified.
+- Not verified: PBaaS chains, systemd unit.
 - Known limit: the header is read before the baskets. If a new block arrives during the
   reads (under a second), some states can be one block newer than `height`. This was seen
   once on mainnet (2 of 27 states one block newer); the states were unchanged.
-- Known limit: a thin basket can set a misleading price. On mainnet "auto", Ⓐ (307 VRSC in
-  reserve) prices Bridge.vARRR at 2.83 (3.03 on its own chain) and Bridge.vDEX at 3.47
-  (3.27); motb (715 VRSC) prices vwBTC.vETH at 52,388 (tBTC.vETH: 65,556). The service has
-  no minimum-liquidity rule yet.
+- Thin baskets: without the minimum, Ⓐ (307 VRSC in reserve) priced Bridge.vARRR at 2.83
+  (3.03 on its own chain) and Bridge.vDEX at 3.47 (3.27), and motb (715 VRSC) priced
+  vwBTC.vETH at 52,388 (tBTC.vETH: 65,556). With the default of 1,000 VRSC these get no
+  price. Bridge.vARRR, Bridge.CHIPS and Bridge.vDEX then need their own PBaaS daemon
+  (`pbaas` config) for a price. A basket's own price (rule 3) has no minimum, so a thin
+  basket still shows a price for its own unit.
 
 ## Open questions for the Verus developers
 
 - Is one published price file acceptable? Who hosts it, and on which domain?
-- Anchor rule: is DAI.vETH = 1 USD acceptable? What must the service publish while
-  baskets are frozen (today it publishes the frozen prices with fresh times)?
+- Anchor rule: is DAI.vETH = 1 USD acceptable?
+- Frozen baskets: on 2026-11-20 every mainnet basket state was unchanged over the blocks of
+  the test (all 27 over blocks 4330959 to 4330965; the 4 known baskets since 4330936). The
+  service cannot tell a frozen basket from a quiet one, so it publishes the last on-chain
+  price with a fresh block height. Is that acceptable, or must the daemon expose a
+  "conversions disabled" state the service can read?
 - Which PBaaS chains must it cover at the start? Should a VRSC-only node use the imported
   states of Bridge.vARRR, Bridge.CHIPS and Bridge.vDEX (close to, but behind, the PBaaS
   chain's own state), or must each PBaaS chain have its own daemon?
 - Is about 28 `getcurrency` calls per block on mainnet (about 2,040 calls per hour)
   acceptable, or should the default be a fixed basket list?
-- Should there be a minimum-liquidity rule? A minimum of 1,000 VRSC in the route basket
-  would remove 20 of the 50 mainnet prices (9 if it applies only to reserve routes).
+- Is 1,000 VRSC the right default for `minRouteReserve`? It removes 9 of 50 mainnet prices.
+  Should a basket's own price (rule 3) also need a minimum? On mainnet that would remove 11
+  more (all baskets under 1,000 VRSC).
 
 ## License
 

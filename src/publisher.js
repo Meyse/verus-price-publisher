@@ -156,7 +156,11 @@ export class Publisher {
     const { chain } = this.config;
     const main = await this.readChain(chain, hash, [chain.anchorBasket]);
     const { nativeUsd, prices } = computePrices({
-      baskets: main.baskets, native: chain.id, anchor: chain.anchor, anchorBasket: chain.anchorBasket,
+      baskets: main.baskets,
+      native: chain.id,
+      anchor: chain.anchor,
+      anchorBasket: chain.anchorBasket,
+      minRouteReserve: this.config.minRouteReserve,
     });
     if (!nativeUsd) this.log('warn', `${chain.name}: no native USD price from the anchor basket`);
 
@@ -165,7 +169,11 @@ export class Publisher {
       try {
         const read = await this.readChain(pbaas, null, []);
         const result = computePrices({
-          baskets: read.baskets, native: chain.id, anchor: chain.anchor, nativeUsd: nativeUsd ?? 0n,
+          baskets: read.baskets,
+          native: chain.id,
+          anchor: chain.anchor,
+          nativeUsd: nativeUsd ?? 0n,
+          minRouteReserve: this.config.minRouteReserve,
         });
         for (const [id, price] of result.prices) {
           if (!prices.has(id)) prices.set(id, { ...price, route: { ...price.route, system: pbaas.id } });

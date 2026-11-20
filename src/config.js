@@ -38,6 +38,7 @@ const DEFAULTS = {
   minIntervalSeconds: 60,
   basketListSeconds: 3600,
   maxAgeSeconds: 900,
+  minRouteReserve: 1000,
   http: null,
 };
 
@@ -137,6 +138,7 @@ export function loadConfig({ configPath, chain, env = process.env } = {}) {
     minIntervalMs: number(merged.minIntervalSeconds, 'minIntervalSeconds', 0) * 1000,
     basketListMs: number(merged.basketListSeconds, 'basketListSeconds', 60) * 1000,
     maxAgeSeconds: number(merged.maxAgeSeconds, 'maxAgeSeconds', 60),
+    minRouteReserve: String(number(merged.minRouteReserve, 'minRouteReserve', 0)),
     http,
   };
 }
