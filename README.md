@@ -18,9 +18,9 @@ the number of wallets.
 By default (`"baskets": "auto"`) the service finds the baskets itself: once per hour it
 calls `listcurrencies {"systemtype":"local"}` and keeps every live local basket. Then each
 new block costs **1 `getblockheader` + 1 `getcurrency` per live basket**, plus one
-`getbestblockhash` every 10 s. On VRSCTEST (91 live baskets) that is about 5,900 calls per
-hour. On VRSC mainnet the cost is the same formula with the mainnet basket count, which is
-not measured yet.
+`getbestblockhash` every 10 s. On VRSC mainnet (27 live local baskets on 2026-11-20) that
+is **28 calls per block, about 2,040 calls per hour**. On VRSCTEST (91 live baskets) it is
+about 5,900 calls per hour.
 
 To read only the baskets you choose, set a fixed list in the config file. Then
 `listcurrencies` is never called and each block costs 1 + the number of listed baskets:
@@ -56,8 +56,8 @@ The anchor basket is always read, also when it is not in the list. See
 
 ## Node load (measured)
 
-Measured against a VRSCTEST daemon (Verus 1.2.18) on 2026-11-20, with the counters the
-service logs after each cycle (`calls {...}` in the log).
+Measured against a VRSC mainnet daemon and a VRSCTEST daemon (Verus 1.2.18) on
+2026-11-20, with the counters the service logs after each cycle (`calls {...}` in the log).
 
 | | RPC calls |
 |---|---|
@@ -66,15 +66,15 @@ service logs after each cycle (`calls {...}` in the log).
 | Each cycle (new block) | 1 `getblockheader` + 1 `getcurrency` per basket |
 | Basket list, at most once per hour | 1 `listcurrencies` |
 
-VRSCTEST has 91 live baskets: **92 calls per cycle** (plus the poll that found the block).
-With the defaults and one block per minute that is about
-360 polls + 60 × 92 + 1 = **5,881 calls per hour**, the same for 1 wallet or 1 million.
-A cycle took 200 to 470 ms on the test machine (about 600 ms when it also refreshed the basket list).
+| Chain, basket mode | Baskets | Calls per cycle | Calls per hour (1 block/min) | Cycle time |
+|---|---|---|---|---|
+| VRSC, `"auto"` | 27 live local | 28 | 360 + 60 × 28 + 1 = **2,041** | 560 to 950 ms |
+| VRSC, fixed list of 4 | 4 | 5 | 360 + 60 × 5 = **660** | 190 ms |
+| VRSCTEST, `"auto"` | 91 live local | 92 | 360 + 60 × 92 + 1 = **5,881** | 200 to 470 ms |
 
-VRSC mainnet with the four known VRSC baskets as a fixed list (Bridge.vETH, Pure, Kaiju,
-Switch): 5 calls per cycle, about 660 calls per hour. The mainnet count with
-`"baskets": "auto"` is not measured (the public API test did not call `listcurrencies`);
-it is 1 + the number of live local baskets per cycle, plus the polls.
+"Calls per cycle" does not count the poll that found the block. The first cycle after a
+basket-list refresh also has the `listcurrencies` call (about 0.1 to 0.3 s more). The load
+is the same for 1 wallet or 1 million.
 
 To lower the load: raise `pollSeconds` or `minIntervalSeconds`, or set a fixed `baskets` list.
 
@@ -287,11 +287,27 @@ come from JSON numbers, so they keep about 15 to 16 significant digits (the daem
   against a fake daemon, the HTTP server).
 - Live: VRSCTEST daemon on 2026-11-20, several new blocks. VRSCTEST, DAI.vETH and
   Bridge.vETH prices checked by hand against the raw Bridge.vETH basket state.
-- Mainnet: one single run against `https://api.verus.services` with the fixed basket list,
-  no `listcurrencies`. All 12 VRSC-chain prices matched the 2026-11-01 worked example within 0.1 %.
-- Not verified: PBaaS chains, mainnet `"baskets": "auto"`, Docker image (not built), systemd unit.
+- Mainnet, public API: one single run against `https://api.verus.services` with the fixed
+  basket list, no `listcurrencies`. All 12 VRSC-chain prices matched the 2026-11-01 worked
+  example within 0.1 %.
+- Mainnet, local daemon, 2026-11-20: `"auto"` for 4 cycles (heights 4330959 to 4330965;
+  27 live local baskets, 50 prices). VRSC, Bridge.vETH, vETH, CHIPS, vUSDC.vETH and SUPER🛒
+  checked by hand against raw `getcurrency` output: equal to 12 significant digits. A run
+  with the fixed list of 4 gave the same 12 prices as the public API run.
+- In "auto" mode some reserve prices come from a different basket than with the fixed list,
+  because a basket with a larger VRSC reserve holds them: vETH (NATI🦉, −0.08 %),
+  vUSDC.vETH (Floralis, −0.41 %), vUSDT.vETH (Floralis, +0.05 %), EURC.vETH (Floralis, −0.03 %).
+- Basket states on 2026-11-20: all 27 mainnet basket states were identical over the 7 blocks
+  of the test, and the 4 known baskets were also identical to the public API read 29 blocks
+  earlier. The prices did not move (frozen baskets).
+- Not verified: PBaaS chains, Docker image (not built), systemd unit.
 - Known limit: the header is read before the baskets. If a new block arrives during the
-  reads (they take under a second), some states can be one block newer than `height`.
+  reads (under a second), some states can be one block newer than `height`. This was seen
+  once on mainnet (2 of 27 states one block newer); the states were unchanged.
+- Known limit: a thin basket can set a misleading price. On mainnet "auto", Ⓐ (307 VRSC in
+  reserve) prices Bridge.vARRR at 2.83 (3.03 on its own chain) and Bridge.vDEX at 3.47
+  (3.27); motb (715 VRSC) prices vwBTC.vETH at 52,388 (tBTC.vETH: 65,556). The service has
+  no minimum-liquidity rule yet.
 
 ## Open questions for the Verus developers
 
@@ -301,8 +317,10 @@ come from JSON numbers, so they keep about 15 to 16 significant digits (the daem
 - Which PBaaS chains must it cover at the start? Should a VRSC-only node use the imported
   states of Bridge.vARRR, Bridge.CHIPS and Bridge.vDEX (close to, but behind, the PBaaS
   chain's own state), or must each PBaaS chain have its own daemon?
-- Is about 92 `getcurrency` calls per block on testnet acceptable, or should the default
-  be a fixed basket list?
+- Is about 28 `getcurrency` calls per block on mainnet (about 2,040 calls per hour)
+  acceptable, or should the default be a fixed basket list?
+- Should there be a minimum-liquidity rule? A minimum of 1,000 VRSC in the route basket
+  would remove 20 of the 50 mainnet prices (9 if it applies only to reserve routes).
 
 ## License
 
