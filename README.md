@@ -1,70 +1,65 @@
 # verus-price-publisher
 
-A small service that runs next to a Verus daemon (`verusd`). Once per new block it reads
-the basket (fractional currency) states from the daemon's local RPC, computes a USD price
-for each Verus currency, and writes one JSON file: `v1/prices.json`. It also keeps a price
-history in three files: `v1/history/hour.json`, `day.json` and `week.json`.
+A service that publishes USD prices of Verus currencies as static JSON files. It runs as
+one process next to a VRSC daemon (`verusd`). At each new block it reads the basket
+(fractional currency) states over the daemon's RPC, computes the prices, and writes the
+files. Wallets download the files, so the load on the node does not grow with the number
+of wallets.
 
-Wallets download these files. The load on the node is constant: it does not grow with
-the number of wallets.
-
-- Plain JavaScript (Node.js 20 or newer). **No runtime dependencies**, no build step.
-  About 1,050 lines in `src/`.
-- Read-only RPC: an allow-list of five methods. Any other method is refused in code.
-- RPC credentials come from the daemon conf file or environment variables. They are
-  never logged and never written to the output.
-- A thin basket cannot set the price of another currency: a reserve route needs at least
-  `minRouteReserve` (default 1,000) native coins in the basket.
-- PBaaS chain coins (vARRR, CHIPS, vDEX) take their price only from their own bridge
-  basket on their own chain. They need a `pbaas` entry; see [PBaaS chains](#pbaas-chains).
-
-### Basket discovery and its cost (read this first)
-
-By default (`"baskets": "auto"`) the service finds the baskets itself: once per hour it
-calls `listcurrencies {"systemtype":"local"}` and keeps every live local basket. Then each
-new block costs **1 `getblockheader` + 1 `getcurrency` per live basket**, plus one
-`getbestblockhash` every 10 s. On VRSC mainnet (27 live local baskets on 2026-11-20) that
-is **28 calls per block, about 2,040 calls per hour**. On VRSCTEST (91 live baskets) it is
-about 5,900 calls per hour.
-
-To read only the baskets you choose, set a fixed list in the config file. Then
-`listcurrencies` is never called and each block costs 1 + the number of listed baskets:
-
-```json
-"baskets": ["i3f7tSctFkiPpiedY8QR5Tep9p4qDVebDx", "iHax5qYQGbcMGqJKKrPorpzUBX2oFFXGnY",
-            "i9kVWKU2VwARALpbXn4RS9zvrhvNRaUibb", "i4Xr5TAMrDTD99H69EemhjDxJ4ktNskUtc"]
-```
-
-These are Bridge.vETH, Pure, Kaiju and Switch: 5 calls per block, about 660 calls per hour.
-The anchor basket is always read, also when it is not in the list. See
-[Node load](#node-load-measured) for the measurements.
+- **What it needs:** one VRSC daemon on the same machine and Node.js 20 or newer. It needs
+  no PBaaS node: the coins of vARRR, CHIPS and vDEX come from the public APIs of those
+  chains (built in, off by default). No runtime dependencies, no build step.
+- **What it costs the node:** read-only RPC (an allow-list of five methods). Each new block
+  costs 1 `getblockheader` and 1 `getcurrency` per basket. Each poll costs 1
+  `getbestblockhash`, and no poll calls the daemon in the 60 s after a cycle. On VRSC
+  mainnet that is about 1,780 calls per hour, or about 400 with a fixed
+  list of 4 baskets. The price history makes no extra RPC calls. See
+  [Node load](#node-load-measured).
+- **How to install:** a git clone and a systemd unit, or a Docker image. See
+  [Install](#install). Nothing to change in the daemon's config.
+- **What it outputs:** `v1/prices.json` (the current prices, rewritten at each block) and
+  `v1/history/hour.json`, `day.json` and `week.json` (the price history). See
+  [Output schema](#output-schema-v1) and [Price history](#price-history-v1).
 
 ## How it works
 
-1. Every `pollSeconds` (default 10 s) the service calls `getbestblockhash`.
-2. On a new block (and at most once per `minIntervalSeconds`, default 60 s) it runs a cycle:
-   `getblockheader` for the height and time, then one `getcurrency` per basket.
-3. The basket list comes from `listcurrencies {"systemtype":"local"}`, at most once per
+1. Every `pollSeconds` (default 30 s) the service checks for a new block with
+   `getbestblockhash`. A cycle runs at most once per `minIntervalSeconds` (default 60 s).
+   In that time after a cycle the service makes no RPC call at all; the first poll after
+   it is the one at the end of the interval. When two blocks come within one poll period,
+   only the newer one is published.
+2. With [block notification](#block-notification-optional) the daemon tells the service
+   about each new block, and the check runs at once. A notification inside the minimum
+   interval waits until the interval ends. The regular poll becomes a slow safety poll
+   (default 300 s).
+3. On a new block it runs a cycle: `getblockheader` for the height and time, then one
+   `getcurrency` per basket.
+4. The basket list comes from `listcurrencies {"systemtype":"local"}`, at most once per
    `basketListSeconds` (default 1 hour), because `listcurrencies` is expensive. It keeps
    fractional currencies that are not pre-launch and not refunding. You can also give a
    fixed list instead (`"baskets": [...]`); then `listcurrencies` is never called.
-4. It computes all prices in one pass (see [Price rules](#price-rules)) and writes
+5. It computes all prices in one pass (see [Price rules](#price-rules)) and writes
    `v1/prices.json` atomically (temporary file, `fsync`, rename).
-5. If any RPC call fails (also a single basket read), the cycle stops. No partial file is
+6. If any RPC call fails (also a single basket read), the cycle stops. No partial file is
    written. The last file stays as it is and its times do not move, so clients see the age
    and can stop showing the price. The next poll tries again. The service logs the first
    failure and the recovery, not every failed poll. An unknown id in a fixed `baskets` list
    therefore stops publishing until you fix the list.
-6. After a restart the service serves the saved file (if it has the same schema, chain and
+7. After a restart the service serves the saved file (if it has the same schema, chain and
    anchor) and does not rewrite it until a new block arrives, so a restart does not make an
    old block look new.
-7. Price history (on by default, `"history": false` turns it off). After each successful
+8. Price history (on by default, `"history": false` turns it off). After each successful
    cycle the service checks three UTC slots: the full hour, the day (00:00) and the week
    (Monday 00:00). The first successful cycle in a new slot adds one sample to that
    slot's file: the slot start, the block height, the block time and the price of each
-   currency. Other cycles in the same slot add nothing. Nothing is interpolated: a slot in
-   which the service did not run, or every cycle failed, has no sample.
-8. The history files are the state. At start the service reads them and continues; a
+   currency. Other cycles in the same slot add nothing. Nothing is interpolated.
+   **After downtime nothing is fetched afterwards:** the service reads only the current
+   state, so a slot in which the service did not run, or every cycle failed, stays
+   without a sample.
+   **The history files roll over:** each file keeps a fixed window
+   (`historyRetentionDays`: 7 days hourly, 400 days daily, weekly without a limit), and
+   the oldest samples drop off when new ones come in.
+9. The history files are the state. At start the service reads them and continues; a
    slot that already has a sample does not get a second one. Each write is atomic. A
    file for another chain, another anchor or another schema, or a damaged file, is renamed
    to `<file>.replaced-<unix time>` (never deleted), a new file starts, and the service
@@ -77,21 +72,31 @@ The anchor basket is always read, also when it is not in the list. See
 
 ## Node load (measured)
 
-Measured against a VRSC mainnet daemon and a VRSCTEST daemon (Verus 1.2.18) on
-2026-11-20, with the counters the service logs after each cycle (`calls {...}` in the log).
+Measured against a VRSC mainnet daemon and a VRSCTEST daemon (Verus 1.2.18), with the
+counters the service logs after each cycle (`calls {...}` in the log) and a counting proxy
+for the polls.
 
 | | RPC calls |
 |---|---|
 | Start-up, once | 1 `getblockchaininfo` (checks the chain id) |
-| Each poll | 1 `getbestblockhash` |
+| Each poll | 1 `getbestblockhash`; none in the minimum interval after a cycle |
 | Each cycle (new block) | 1 `getblockheader` + 1 `getcurrency` per basket |
 | Basket list, at most once per hour | 1 `listcurrencies` (local baskets) + 1 `listcurrencies` (PBaaS chains); with a fixed list: 1 `getcurrency` per `pbaas` entry |
 
-| Chain, basket mode | Baskets | Calls per cycle | Calls per hour (1 block/min) | Cycle time |
+Polls per hour, measured on VRSCTEST (about 1 block per minute):
+
+| Mode | Polls per hour |
+|---|---|
+| Default: poll every 30 s, no poll in the 60 s after a cycle | about 100 |
+| Block notification, safety poll every 300 s | about 35 |
+
+Total calls per hour at 1 block per minute (60 cycles), with the default polling:
+
+| Chain, basket mode | Baskets | Calls per cycle | Calls per hour | Cycle time |
 |---|---|---|---|---|
-| VRSC, `"auto"` | 27 live local | 28 | 360 + 60 × 28 + 2 = **2,042** | 560 to 950 ms |
-| VRSC, fixed list of 4 | 4 | 5 | 360 + 60 × 5 = **660** | 190 ms |
-| VRSCTEST, `"auto"` | 91 live local | 92 | 360 + 60 × 92 + 2 = **5,882** | 200 to 470 ms |
+| VRSC, `"auto"` | 27 live local | 28 | 60 × 28 + 100 + 2 = **1,782** | 560 to 950 ms |
+| VRSC, fixed list of 4 | 4 | 5 | 60 × 5 + 100 = **400** | 190 ms |
+| VRSCTEST, `"auto"` | 91 live local | 92 | 60 × 92 + 100 + 2 = **5,622** | 200 to 470 ms |
 
 "Calls per cycle" does not count the poll that found the block. The first cycle after a
 basket-list refresh also has the `listcurrencies` call (about 0.1 to 0.3 s more). The load
@@ -101,7 +106,24 @@ The price history makes **zero extra RPC calls**. It uses the prices that the cy
 already computed. Its only cost is one small file write per slot (24 hourly, 1 daily and
 at most 1 weekly write per day).
 
-To lower the load: raise `pollSeconds` or `minIntervalSeconds`, or set a fixed `baskets` list.
+### Basket list
+
+By default (`"baskets": "auto"`) the service finds the baskets itself: once per hour it
+calls `listcurrencies {"systemtype":"local"}` and keeps every live local basket. To read
+only the baskets you choose, set a fixed list. Then `listcurrencies` is never called, and
+each block costs 1 + the number of listed baskets:
+
+```json
+"baskets": ["i3f7tSctFkiPpiedY8QR5Tep9p4qDVebDx", "iHax5qYQGbcMGqJKKrPorpzUBX2oFFXGnY",
+            "i9kVWKU2VwARALpbXn4RS9zvrhvNRaUibb", "i4Xr5TAMrDTD99H69EemhjDxJ4ktNskUtc"]
+```
+
+These are Bridge.vETH, Pure, Kaiju and Switch. The anchor basket is always read, also
+when it is not in the list. A currency that is only in baskets outside the list gets no
+price.
+
+To lower the load further: turn on block notification, raise `minIntervalSeconds`, or set
+a fixed `baskets` list.
 
 ## Install
 
@@ -159,6 +181,53 @@ docker run -d --name verus-prices --env-file rpc.env \
 Environment variables are visible to anyone who can run `docker inspect` on the host.
 The conf-file mount does not have that exposure.
 
+## Block notification (optional)
+
+Without it the service polls every 30 s, and the daemon's config stays as it is.
+
+With it, the daemon's `blocknotify` command touches a file at each new block. The service
+watches the file's time (one `stat` per second, no RPC call) and then checks the daemon at
+once. The file carries no data: the service always asks the daemon for the best block, and
+the minimum interval still applies. The service needs only read access to the file.
+
+The channel is a file and not a signal, because a signal from the daemon's user to a
+service that runs as another user needs root, and a signal into a container needs Docker
+access.
+
+Make a folder that the daemon's user can write and the service can read:
+
+```sh
+sudo mkdir -p /var/lib/verus-blocknotify
+sudo chown <daemon user> /var/lib/verus-blocknotify   # mode 755
+```
+
+systemd (daemon and service as the same user or as different users). In `VRSC.conf`:
+
+```ini
+blocknotify=touch /var/lib/verus-blocknotify/VRSC
+```
+
+In the service's `config.json`:
+
+```json
+"blockNotifyFile": "/var/lib/verus-blocknotify/VRSC"
+```
+
+Docker (daemon on the host): the same `blocknotify=` line in `VRSC.conf` on the host, and
+the folder mounted read-only into the container:
+
+```sh
+docker run ... \
+  -v /var/lib/verus-blocknotify:/run/blocknotify:ro \
+  -e BLOCK_NOTIFY_FILE=/run/blocknotify/VRSC \
+  verus-price-publisher --chain VRSC
+```
+
+The daemon reads `blocknotify` when it starts. With `blockNotifyFile` set, `pollSeconds`
+defaults to 300. At start the service logs `block notification: watching <file>`. If the
+file never changes (for example a wrong path), the service still publishes at each safety
+poll.
+
 ## Configuration
 
 All keys are optional. Without a config file, use `--chain VRSC` or `--chain VRSCTEST` and
@@ -176,7 +245,8 @@ the defaults.
 | `rpc.timeoutSeconds` | 15 | Timeout for one RPC call. |
 | `baskets` | `"auto"` | `"auto"` (from `listcurrencies`) or a list of basket ids or names. Ids avoid a double read. |
 | `outDir` | `./out` | The file goes to `<outDir>/v1/prices.json`. |
-| `pollSeconds` | 10 | How often to check for a new block. |
+| `pollSeconds` | 30; 300 with `blockNotifyFile` | How often to check for a new block. No check calls the daemon in the minimum interval after a cycle. |
+| `blockNotifyFile` | `null` (off) | File that the daemon's `blocknotify` command touches. See [Block notification](#block-notification-optional). |
 | `minIntervalSeconds` | 60 | Minimum time between two cycles. |
 | `basketListSeconds` | 3600 | How often to refresh the basket list (minimum 60). |
 | `maxAgeSeconds` | 900 | Copied into the file as `maxAge`: the age after which clients should not show the prices. |
@@ -184,55 +254,52 @@ the defaults.
 | `history` | `true` | Keep the price history files under `<outDir>/v1/history/`. `false` turns it off. |
 | `historyRetentionDays` | `{ "hour": 7, "day": 400, "week": 0 }` | How many days of samples each history file keeps. Older samples are removed. `0` = no limit. |
 | `http` | `null` (off) | `{ "host": "127.0.0.1", "port": 8080 }` to serve the files from the service itself. |
-| `pbaas` | `[]` | Extra PBaaS chains: `{ name, id, rpc }` each, optional `baskets` (default: only the chain's bridge basket). See [PBaaS chains](#pbaas-chains). `rpc` takes `conf`, `url`, `timeoutSeconds` as for the main chain. |
+| `pbaas` | `[]` (off) | PBaaS chains. A built-in name (`"vARRR"`, `"CHIPS"`, `"vDEX"`) uses that chain's public API. An object `{ name, id, rpc }` uses another server, for example an own daemon; optional `baskets` (default: only the chain's bridge basket). See [PBaaS chains](#pbaas-chains). `rpc` takes `conf`, `url`, `timeoutSeconds` as for the main chain. |
 
 Environment variables: `VERUS_CHAIN`, `VERUS_RPC_CONF`, `VERUS_RPC_URL`, `VERUS_RPC_USER`,
 `VERUS_RPC_PASSWORD` (main chain only; the user and password override the conf file),
-`OUT_DIR`, `HTTP_PORT`, `HTTP_HOST`.
+`OUT_DIR`, `HTTP_PORT`, `HTTP_HOST`, `BLOCK_NOTIFY_FILE`, and `VERUS_PBAAS` (built-in
+PBaaS names, comma-separated, used when the config file has no `pbaas`).
 
 ### PBaaS chains
 
-**The coin of a PBaaS chain (vARRR, CHIPS, vDEX, …) takes its USD price only from that
-chain's own bridge basket, read on that chain.** So add a `pbaas` entry per chain. Without
-an entry, the chain's coin and its bridge basket have no price. The main chain holds only an
-imported copy of each bridge basket, and the service does not use it (see below).
+The coin of a PBaaS chain takes its USD price only from that chain's own bridge basket,
+read on that chain. **The service needs no PBaaS node for this.** It reads the bridge
+basket through the chain's public API. vARRR, CHIPS and vDEX are built in. Turn them on by
+name:
 
-An entry needs `name`, `id` and `rpc`. The service finds the bridge basket from chain data
-(`gatewayconverterid` of the chain definition) and reads only that basket on the PBaaS
-chain. The ids are the same on every node:
+```json
+"pbaas": ["vARRR", "CHIPS", "vDEX"]
+```
 
-| Chain | `id` | Bridge basket (found automatically) |
-|---|---|---|
-| vARRR | `iExBJfZYK7KREDpuhj6PzZBzqMAKaFg7d2` | Bridge.vARRR `iD5WRg7jdQM1uuoVHsBCAEKfJCKGs1U3TB` |
-| CHIPS | `iJ3WZocnjG9ufv7GKUA4LijQno5gTMb7tP` | Bridge.CHIPS `i3nokiCTVevZMLpR3VmZ7YDfCqA5juUqqH` |
-| vDEX | `iHog9UCTrn95qpUBFCZ7kKz7qWdMA8MQ6N` | Bridge.vDEX `i6j1rzjgrDhSmUYiTtp21J8Msiudv5hgt9` |
+Or, without a config file: `VERUS_PBAAS=vARRR,CHIPS,vDEX`. The built-in entries are for
+VRSC mainnet. They are off by default; without an entry, the chain's coin and its bridge
+basket have no price.
 
-**Recommended: your own PBaaS daemon.** Point `rpc.conf` at that chain's daemon conf file
-(the credentials go only to a local address, as for the main chain):
+| Name | Chain `id` | Public API | Bridge basket (found from chain data) |
+|---|---|---|---|
+| `vARRR` | `iExBJfZYK7KREDpuhj6PzZBzqMAKaFg7d2` | `https://vapi.piratechain.com/` | Bridge.vARRR `iD5WRg7jdQM1uuoVHsBCAEKfJCKGs1U3TB` |
+| `CHIPS` | `iJ3WZocnjG9ufv7GKUA4LijQno5gTMb7tP` | `https://api.chips.cash/` | Bridge.CHIPS `i3nokiCTVevZMLpR3VmZ7YDfCqA5juUqqH` |
+| `vDEX` | `iHog9UCTrn95qpUBFCZ7kKz7qWdMA8MQ6N` | `https://api.vdex.to/` | Bridge.vDEX `i6j1rzjgrDhSmUYiTtp21J8Msiudv5hgt9` |
+
+Each chain costs its public API 3 calls per VRSC cycle (`getbestblockhash`,
+`getblockheader`, 1 `getcurrency`), about 180 per hour, and 1 `getblockchaininfo` at start;
+the service never calls `listcurrencies` there. The prices of that chain then come from a
+server that the operator does not run. A chain that does not answer is left out of that
+cycle, and the main chain and the other chains still publish.
+
+An own daemon for a chain works the same way. Give the built-in name with an `rpc`; the
+conf file's credentials go only to a local address, as for the main chain. With an own
+daemon, `"baskets": "auto"` also reads the other live baskets of that chain (one
+`listcurrencies` per hour there):
 
 ```json
 "pbaas": [
-  { "name": "vARRR", "id": "iExBJfZYK7KREDpuhj6PzZBzqMAKaFg7d2",
-    "rpc": { "conf": "/path/to/the/vARRR/daemon.conf" } }
+  { "name": "vARRR", "rpc": { "conf": "/path/to/the/vARRR/daemon.conf" }, "baskets": "auto" }
 ]
 ```
 
-With your own daemon you can add `"baskets": "auto"` to also read the other live baskets of
-that chain (one `listcurrencies` per hour there). A list of ids works as for the main chain.
-
-**Possible, not recommended: a public API.** The same entry with a public RPC URL and no
-credentials:
-
-```json
-  { "name": "CHIPS", "id": "iJ3WZocnjG9ufv7GKUA4LijQno5gTMb7tP",
-    "rpc": { "url": "https://api.chips.cash/" } }
-```
-
-This costs the public API **3 calls per VRSC block** (`getbestblockhash`, `getblockheader`,
-1 `getcurrency`), about 180 calls per hour, plus 1 `getblockchaininfo` at start. Community
-members host these APIs. Do not use `"auto"` there (it would call `listcurrencies`). Also,
-the service cannot check data that comes from a server it does not run: a public API sets
-those prices. Use your own daemon for a service that wallets rely on.
+Any other PBaaS chain: `{ "name": "...", "id": "<chain id>", "rpc": { "url": "..." } }`.
 
 How the prices combine:
 
@@ -247,14 +314,10 @@ How the prices combine:
 - Any other currency that both chains price keeps the main chain's price.
 - Prices from a PBaaS chain have `route.system` set to that chain's id. The file lists
   each PBaaS chain read in this cycle in `systems`.
-- If a PBaaS chain fails, its prices (also its coin) are left out of that cycle, the other
-  chains and the main chain still publish, and the service logs the failure once and the
-  recovery once. The service checks each chain's `chainid` with `getblockchaininfo` and
-  stops on a mismatch.
-
-Why not the imported copy on the main chain: the main chain's copy of a bridge basket
-carries a height of the PBaaS chain (`bestheight`) and no time. The service cannot know the
-age of that state, so it does not use it.
+- The service logs a failing chain once and its recovery once. It checks each chain's
+  `chainid` with `getblockchaininfo` and stops on a mismatch.
+- The main chain's imported copy of a bridge basket is not used. It carries a height of
+  the PBaaS chain (`bestheight`) and no time, so its age is not known.
 
 ## Serving the file
 
@@ -484,6 +547,9 @@ come from JSON numbers, so they keep about 15 to 16 significant digits (the daem
   stops if it is not. A reply without a `chainid` counts as a failed call.
 - The built-in HTTP server serves four fixed paths from memory. It never maps a request
   path to a file on disk.
+- The block notification file is only watched with `stat`; its content is never read. A
+  process that can touch it can start at most one check per `minIntervalSeconds`.
+- A built-in PBaaS entry sends no credentials. `"auto"` is refused for a public API.
 - The output holds only public chain data.
 
 ## Verification status
@@ -528,10 +594,22 @@ Tested on 2026-11-20:
   from the raw states. Each public API got 4 calls in the first cycle and 3 per block after
   that. With one PBaaS chain on a dead address, the main chain and the other chains
   published, with one warning.
+- Polling on a live VRSCTEST daemon, 12 minutes (7 blocks), three runs side by side
+  through a counting proxy: the earlier version (poll every 10 s, poll before the
+  interval check) made 73 polls (about 360 per hour), the default mode 20 (about 100 per
+  hour), block notification 7 (about 35 per hour). The default mode published one block
+  less: two blocks came 14 s apart, and one poll saw only the newer one.
+  In notification mode a test harness touched the file at each new block; a touch inside
+  the minimum interval waited until the interval ended.
+- Built-in PBaaS names (`VERUS_PBAAS=vARRR,CHIPS,vDEX`, `--once`, local VRSC daemon): vARRR
+  and CHIPS were priced from their bridge baskets through their public APIs (4 calls each
+  in the first cycle). vDEX answered HTTP 502; it was left out with one warning and the
+  rest published.
 - Not verified: a PBaaS chain on its own local daemon (`rpc.conf`), `"auto"` on a PBaaS
-  chain, vDEX (its public API did not answer during the test), the systemd unit, the Linux
+  chain, vDEX prices (its public API did not answer during the tests), the systemd unit, the Linux
   `--network host` Docker command, the nginx and Caddy snippets, a history run over days
-  with the real clock.
+  with the real clock, a real `blocknotify=` line in a daemon config (the notification
+  was sent by a test harness).
 
 Known limits:
 
@@ -541,22 +619,6 @@ Known limits:
   their price in deeper baskets, and such a basket is cheap to create. With the default of
   1,000 native coins it sets no price for its reserves. A basket's own price (rule 3) has
   no minimum, so a thin basket keeps a price for its own unit.
-
-## Open questions for the Verus developers
-
-- Is one published price file acceptable? Who hosts it, and on which domain?
-- Anchor rule: is DAI.vETH = 1 USD acceptable?
-- Which PBaaS chains must it cover at the start? A PBaaS coin needs a `pbaas` entry
-  (own daemon or public API).
-- Is the imported copy of a bridge basket on VRSC acceptable as a fallback for a VRSC-only
-  node? The VRSC daemon gives its age only as a height on the other chain, so the service
-  does not use it. If the daemon exposed the time of that state, a fallback with an age
-  limit would be simple.
-- Is about 28 `getcurrency` calls per block on mainnet (about 2,040 calls per hour)
-  acceptable, or should the default be a fixed basket list?
-- Is 1,000 VRSC the right default for `minRouteReserve`? It removes 9 of 50 mainnet prices.
-  Should a basket's own price (rule 3) also need a minimum? On mainnet that would remove 11
-  more (all baskets under 1,000 VRSC).
 
 ## License
 
