@@ -19,6 +19,8 @@ the number of wallets.
   Pure, Kaiju, Switch) were also unchanged since block 4330936. The service cannot tell a
   frozen basket from one that simply had no conversions. It publishes the last on-chain
   price with a fresh block height.
+- PBaaS chain coins (vARRR, CHIPS, vDEX) take their price only from their own bridge
+  basket on their own chain. They need a `pbaas` entry; see [PBaaS chains](#pbaas-chains).
 
 ### Basket discovery and its cost (read this first)
 
@@ -71,13 +73,13 @@ Measured against a VRSC mainnet daemon and a VRSCTEST daemon (Verus 1.2.18) on
 | Start-up, once | 1 `getblockchaininfo` (checks the chain id) |
 | Each poll | 1 `getbestblockhash` |
 | Each cycle (new block) | 1 `getblockheader` + 1 `getcurrency` per basket |
-| Basket list, at most once per hour | 1 `listcurrencies` |
+| Basket list, at most once per hour | 1 `listcurrencies` (local baskets) + 1 `listcurrencies` (PBaaS chains); with a fixed list: 1 `getcurrency` per `pbaas` entry |
 
 | Chain, basket mode | Baskets | Calls per cycle | Calls per hour (1 block/min) | Cycle time |
 |---|---|---|---|---|
-| VRSC, `"auto"` | 27 live local | 28 | 360 + 60 × 28 + 1 = **2,041** | 560 to 950 ms |
+| VRSC, `"auto"` | 27 live local | 28 | 360 + 60 × 28 + 2 = **2,042** | 560 to 950 ms |
 | VRSC, fixed list of 4 | 4 | 5 | 360 + 60 × 5 = **660** | 190 ms |
-| VRSCTEST, `"auto"` | 91 live local | 92 | 360 + 60 × 92 + 1 = **5,881** | 200 to 470 ms |
+| VRSCTEST, `"auto"` | 91 live local | 92 | 360 + 60 × 92 + 2 = **5,882** | 200 to 470 ms |
 
 "Calls per cycle" does not count the poll that found the block. The first cycle after a
 basket-list refresh also has the `listcurrencies` call (about 0.1 to 0.3 s more). The load
@@ -164,7 +166,7 @@ the defaults.
 | `maxAgeSeconds` | 900 | Copied into the file as `maxAge`: the age after which clients should not show the prices. |
 | `minRouteReserve` | 1000 | Minimum native reserve (in native coins, for example VRSC) of a basket that sets the price of a reserve currency (price rule 4). `0` turns it off. |
 | `http` | `null` (off) | `{ "host": "127.0.0.1", "port": 8080 }` to serve the file from the service itself. |
-| `pbaas` | `[]` | Extra PBaaS chains: `{ name, id, rpc, baskets }` each, see [PBaaS chains](#pbaas-chains). `rpc` takes `conf`, `url`, `timeoutSeconds` as for the main chain. |
+| `pbaas` | `[]` | Extra PBaaS chains: `{ name, id, rpc }` each, optional `baskets` (default: only the chain's bridge basket). See [PBaaS chains](#pbaas-chains). `rpc` takes `conf`, `url`, `timeoutSeconds` as for the main chain. |
 
 Environment variables: `VERUS_CHAIN`, `VERUS_RPC_CONF`, `VERUS_RPC_URL`, `VERUS_RPC_USER`,
 `VERUS_RPC_PASSWORD` (main chain only; the user and password override the conf file),
@@ -172,11 +174,16 @@ Environment variables: `VERUS_CHAIN`, `VERUS_RPC_CONF`, `VERUS_RPC_URL`, `VERUS_
 
 ### PBaaS chains
 
-Add a `pbaas` entry per chain. Give the chain id and the bridge basket as a fixed list.
-The ids are the same on every node; check them with `getcurrency vARRR` and
-`getcurrency Bridge.vARRR` on your VRSC daemon.
+**The coin of a PBaaS chain (vARRR, CHIPS, vDEX, …) takes its USD price only from that
+chain's own bridge basket, read on that chain.** So add a `pbaas` entry per chain. Without
+an entry, the chain's coin and its bridge basket have no price. The main chain holds only an
+imported copy of each bridge basket, and the service does not use it (see below).
 
-| Chain | `id` | Bridge basket |
+An entry needs `name`, `id` and `rpc`. The service finds the bridge basket from chain data
+(`gatewayconverterid` of the chain definition) and reads only that basket on the PBaaS
+chain. The ids are the same on every node:
+
+| Chain | `id` | Bridge basket (found automatically) |
 |---|---|---|
 | vARRR | `iExBJfZYK7KREDpuhj6PzZBzqMAKaFg7d2` | Bridge.vARRR `iD5WRg7jdQM1uuoVHsBCAEKfJCKGs1U3TB` |
 | CHIPS | `iJ3WZocnjG9ufv7GKUA4LijQno5gTMb7tP` | Bridge.CHIPS `i3nokiCTVevZMLpR3VmZ7YDfCqA5juUqqH` |
@@ -188,21 +195,19 @@ The ids are the same on every node; check them with `getcurrency vARRR` and
 ```json
 "pbaas": [
   { "name": "vARRR", "id": "iExBJfZYK7KREDpuhj6PzZBzqMAKaFg7d2",
-    "rpc": { "conf": "/path/to/the/vARRR/daemon.conf" },
-    "baskets": ["iD5WRg7jdQM1uuoVHsBCAEKfJCKGs1U3TB"] }
+    "rpc": { "conf": "/path/to/the/vARRR/daemon.conf" } }
 ]
 ```
 
-With your own daemon you can also use `"baskets": "auto"`, which reads all live baskets of
-that chain (one `listcurrencies` per hour there).
+With your own daemon you can add `"baskets": "auto"` to also read the other live baskets of
+that chain (one `listcurrencies` per hour there). A list of ids works as for the main chain.
 
 **Possible, not recommended: a public API.** The same entry with a public RPC URL and no
 credentials:
 
 ```json
   { "name": "CHIPS", "id": "iJ3WZocnjG9ufv7GKUA4LijQno5gTMb7tP",
-    "rpc": { "url": "https://api.chips.cash/" },
-    "baskets": ["i3nokiCTVevZMLpR3VmZ7YDfCqA5juUqqH"] }
+    "rpc": { "url": "https://api.chips.cash/" } }
 ```
 
 This costs the public API **3 calls per VRSC block** (`getbestblockhash`, `getblockheader`,
@@ -215,15 +220,28 @@ How the prices combine:
 
 - The native USD price (VRSC) always comes from the main chain's anchor basket. A PBaaS
   basket gets a price only if it holds VRSC or the anchor. The `minRouteReserve` rule
-  applies the same way.
-- A currency that both chains price keeps the main chain's price. Example (2026-11-20):
-  vARRR keeps 0.2301 from SUPER🛒 on VRSC (276,331 VRSC in reserve) instead of 0.2281 from
-  Bridge.vARRR on vARRR (91,124 VRSC). CHIPS keeps 0.03370 instead of 0.03362.
+  applies the same way, also to the bridge route of the chain's coin.
+- The list of PBaaS chains and their bridges comes from the main chain, at most once per
+  `basketListSeconds`: with `"baskets": "auto"` from one `listcurrencies
+  {"systemtype":"pbaas"}` (all PBaaS chains the main chain knows); with a fixed list from
+  one `getcurrency` per configured chain. With a fixed list, the rule covers only the
+  configured chains.
+- Any other currency that both chains price keeps the main chain's price.
 - Prices from a PBaaS chain have `route.system` set to that chain's id. The file lists
   each PBaaS chain read in this cycle in `systems`.
-- If a PBaaS chain fails, its prices are left out of that cycle, the other chains and the
-  main chain still publish, and the service logs the failure once and the recovery once.
-  The service checks each chain's `chainid` with `getblockchaininfo` and stops on a mismatch.
+- If a PBaaS chain fails, its prices (also its coin) are left out of that cycle, the other
+  chains and the main chain still publish, and the service logs the failure once and the
+  recovery once. The service checks each chain's `chainid` with `getblockchaininfo` and
+  stops on a mismatch.
+
+Why not the imported copy on the main chain (data of 2026-11-20): `getcurrency Bridge.vARRR`
+on VRSC gives the state at vARRR height 1173210 (`bestheight`, equal to
+`lastconfirmedheight`). It holds no time, and the vARRR chain was at height 1341292, so the
+copy was about 168,000 vARRR blocks (about 116 days at 60 s) old. For CHIPS: 4611363 against
+5649874, about 1,038,000 blocks (about 120 days at 10 s). The copy priced vARRR at 0.2295;
+the bridge on vARRR gave 0.2281 (−0.6 %): its VRSC reserve had moved from 91,353 to 91,124
+after the last state that reached VRSC. The VRSC daemon alone cannot see the age of the copy
+in time, so the service does not use it.
 
 ## Serving the file
 
@@ -304,7 +322,7 @@ Or turn on the built-in server (`http` in the config) and proxy to it. It serves
 | `route.basket` | The basket whose state gave the price. |
 | `route.via` | The reference currency: the native coin or the anchor. |
 | `route.nativeReserve` | Only for `reserve` routes: the route basket's reserve in native units, a decimal string (12 significant digits). A wallet can apply a stricter limit than `minRouteReserve`. |
-| `route.system` | Only for prices from a PBaaS chain: that chain's id. |
+| `route.system` | Only for prices from a PBaaS chain: that chain's id. A PBaaS coin has type `reserve`, `basket` = its bridge basket, and `system` set. |
 | `systems` | Only when PBaaS chains are configured: `{ name, id, height, blockTime }` for each chain read in this cycle. |
 
 ## Price rules
@@ -331,6 +349,9 @@ come from JSON numbers, so they keep about 15 to 16 significant digits (the daem
 6. Only baskets whose `systemid` is the chain itself are used. A basket from another
    chain (for example Bridge.vARRR on VRSC) has an imported copy of its state that can be
    older than the state on its own chain.
+7. The coin of a PBaaS chain uses rule 4 with one basket only: its bridge basket
+   (`gatewayconverterid`), read on the PBaaS chain. A larger basket on the main chain does
+   not count. Without a working `pbaas` entry the coin has no price.
 
 ## Security notes
 
@@ -369,8 +390,8 @@ come from JSON numbers, so they keep about 15 to 16 significant digits (the daem
   conversion fields) were identical at blocks 4330959, 4330961, 4330963 and 4330965. The 4
   known baskets were also identical to the public API read at block 4330936. The other 23
   were not read at 4330936. The prices did not move (frozen baskets).
-- `minRouteReserve` 1,000 on mainnet (block 4330974 and one new block): 41 prices instead of
-  50, no other price changed. The 9 without a price: Bears, Bulls (Traders, 336 VRSC),
+- `minRouteReserve` 1,000 on mainnet (block 4330974 and one new block, before the PBaaS
+  coin rule): 41 prices instead of 50, no other price changed. The 9 without a price: Bears, Bulls (Traders, 336 VRSC),
   bitcoins (🟠, 100 VRSC), Bridge.CHIPS, Bridge.vARRR, Bridge.vDEX (Ⓐ, 307 VRSC),
   pepecoin.vETH (Kek🐸, 535 VRSC), vLINK.vETH, vwBTC.vETH (motb, 715 VRSC). On VRSCTEST:
   111 prices instead of 137.
@@ -382,12 +403,15 @@ come from JSON numbers, so they keep about 15 to 16 significant digits (the daem
   and the conf-file credentials were refused for `host.docker.internal` as designed. The
   Linux `--network host` command above is not verified.
 - PBaaS (2026-11-20): main chain on a local VRSC daemon, vARRR and CHIPS through their
-  public APIs with the bridge basket as a fixed list. This added Bridge.vARRR 3.02946362688
-  and Bridge.CHIPS 0.172678554268 (both equal to a hand calculation from the raw states;
-  the 2026-11-01 table has 3.029 and 0.173). 43 prices instead of 41. Each public API got
-  4 calls in the first cycle (3 per block after that). The vDEX API answered HTTP 502 from
-  its CDN at the time, so vDEX was left out and the rest published. A test with one PBaaS
-  chain on a dead address: the main chain and the other chains published, one warning.
+  public APIs, bridge found from chain data. vARRR 0.228125316016 and CHIPS 0.0336244924872
+  from their bridges, Bridge.vARRR 3.02946362688 and Bridge.CHIPS 0.172678554268, all equal
+  to a hand calculation from the raw states (the 2026-11-01 table has 0.2281, 0.0336, 3.029
+  and 0.173). 42 prices. Each public API got 4 calls in the first cycle (3 per block after
+  that). The vDEX API answered HTTP 502 from its CDN, so vDEX and Bridge.vDEX had no price
+  and the rest published. With the main chain only: 38 prices, and vARRR, CHIPS, vDEX and
+  the three bridges have no price. A test with one PBaaS chain on a dead address: the main
+  chain and the other chains published, one warning. VRSCTEST: 110 prices; only CHIPS777
+  (a testnet PBaaS chain without a `pbaas` entry) lost its price.
 - Not verified: a PBaaS chain on its own local daemon (`rpc.conf`), `"auto"` on a PBaaS
   chain, vDEX, systemd unit.
 - Known limit: the header is read before the baskets. If a new block arrives during the
@@ -409,9 +433,13 @@ come from JSON numbers, so they keep about 15 to 16 significant digits (the daem
   service cannot tell a frozen basket from a quiet one, so it publishes the last on-chain
   price with a fresh block height. Is that acceptable, or must the daemon expose a
   "conversions disabled" state the service can read?
-- Which PBaaS chains must it cover at the start? Should a VRSC-only node use the imported
-  states of Bridge.vARRR, Bridge.CHIPS and Bridge.vDEX (close to, but behind, the PBaaS
-  chain's own state), or must each PBaaS chain have its own daemon?
+- Which PBaaS chains must it cover at the start? Today a PBaaS coin needs a `pbaas` entry
+  (own daemon or public API).
+- Is the imported copy of a bridge basket on VRSC acceptable as a fallback for a VRSC-only
+  node? On 2026-11-20 it was about 4 months behind its own chain (vARRR −0.6 %), and the
+  VRSC daemon gives its age only as a height on the other chain. The service does not use
+  it today. If the daemon exposed the time of that state, a fallback with an age limit
+  would be simple.
 - Is about 28 `getcurrency` calls per block on mainnet (about 2,040 calls per hour)
   acceptable, or should the default be a fixed basket list?
 - Is 1,000 VRSC the right default for `minRouteReserve`? It removes 9 of 50 mainnet prices.

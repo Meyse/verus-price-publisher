@@ -119,7 +119,8 @@ export function loadConfig({ configPath, chain, env = process.env } = {}) {
     return {
       name: entry.name,
       id: entry.id,
-      baskets: baskets(entry.baskets, `pbaas[${i}].baskets`),
+      // Default: only the chain's bridge basket (found from chain data), never listcurrencies.
+      baskets: entry.baskets === undefined ? [] : baskets(entry.baskets, `pbaas[${i}].baskets`),
       rpc: rpcClient(entry.rpc, { defaultConf: null, defaultPort: null }),
     };
   });

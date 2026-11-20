@@ -144,3 +144,21 @@ test('the VRSCTEST preset prices through DAI.vETH in Bridge.vETH', async () => {
   assert.equal(format(prices.get(chain.anchorBasket).usd), '7.09025643');
   assert.equal(format(prices.get('iCtawpxUiCc2sEupt7Z4u8SDAncGZpgSKm').usd), '2044.39740899');
 });
+
+test('a PBaaS chain coin takes its price only from its own bridge basket', () => {
+  const C = 'iCHAINCOIN';
+  const big = basket('iBIG', [reserve(N, 1, 100000), reserve(C, 0.5)]); // C = 2 native = 8 USD
+  const bridge = basket('iBRIDGE', [reserve(N, 1, 5000), reserve(C, 0.25)]); // C = 4 native = 16 USD
+  const thinBridge = basket('iBRIDGE', [reserve(N, 1, 10), reserve(C, 0.25)]);
+  const bridges = new Map([[C, 'iBRIDGE']]);
+  const run = (list, map) => computePrices({
+    baskets: [anchorBasket, ...list], native: N, anchor: A, anchorBasket: 'iANCHORBASKET', minRouteReserve: 1000, bridges: map,
+  }).prices;
+
+  assert.equal(format(run([big, bridge]).get(C).usd), '8'); // without the rule: largest reserve
+  const viaBridge = run([big, bridge], bridges).get(C);
+  assert.equal(format(viaBridge.usd), '16');
+  assert.equal(viaBridge.route.basket, 'iBRIDGE');
+  assert.equal(run([big], bridges).has(C), false); // bridge not read (main chain): no price
+  assert.equal(run([big, thinBridge], bridges).has(C), false); // 10 native < 1000
+});

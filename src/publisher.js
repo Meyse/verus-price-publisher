@@ -44,6 +44,7 @@ export class Publisher {
     this.lastHash = null;
     this.lastCycleAt = -Infinity;
     this.basketLists = new Map(); // chain id -> { ids, at }
+    this.bridgeList = null; // { map: PBaaS chain id -> bridge basket id, at }
     this.verified = new Set(); // chain ids whose RPC was checked
     this.failing = false;
     this.failingPbaas = new Set(); // PBaaS chain ids whose last read failed
@@ -132,6 +133,31 @@ export class Publisher {
     return [...new Set([...extra, ...ids])];
   }
 
+  // PBaaS chains and their bridge baskets, from the main chain, at most once per
+  // basketListSeconds. "auto": all PBaaS chains the main chain knows (one listcurrencies).
+  // Fixed list: only the configured pbaas chains (one getcurrency each).
+  async bridges() {
+    const { chain, pbaas } = this.config;
+    if (this.bridgeList && this.now() - this.bridgeList.at < this.config.basketListMs) {
+      return this.bridgeList.map;
+    }
+    const map = new Map();
+    const add = (def) => {
+      if (typeof def?.currencyid === 'string' && def.currencyid !== chain.id
+        && typeof def.gatewayconverterid === 'string') map.set(def.currencyid, def.gatewayconverterid);
+    };
+    if (chain.baskets === 'auto') {
+      const list = await chain.rpc.call('listcurrencies', [{ systemtype: 'pbaas' }]);
+      if (!Array.isArray(list)) throw new Error('listcurrencies: unexpected result');
+      list.forEach((entry) => add(entry?.currencydefinition));
+    }
+    for (const entry of pbaas) {
+      if (!map.has(entry.id)) add(await chain.rpc.call('getcurrency', [entry.id]));
+    }
+    this.bridgeList = { map, at: this.now() };
+    return map;
+  }
+
   // Read each basket once. Any failed read fails the cycle, so a partial
   // file is never published (an unknown id in a fixed list fails every cycle).
   async readBaskets(chain, ids) {
@@ -156,25 +182,32 @@ export class Publisher {
   async cycle(hash) {
     const { chain } = this.config;
     const main = await this.readChain(chain, hash, [chain.anchorBasket]);
+    // A PBaaS chain's coin is priced only by its own bridge basket on its own chain.
+    // On the main chain that basket is an imported copy and is not read, so the main
+    // chain gives these coins no price.
+    const bridges = await this.bridges();
     const { nativeUsd, prices } = computePrices({
       baskets: main.baskets,
       native: chain.id,
       anchor: chain.anchor,
       anchorBasket: chain.anchorBasket,
       minRouteReserve: this.config.minRouteReserve,
+      bridges,
     });
     if (!nativeUsd) this.log('warn', `${chain.name}: no native USD price from the anchor basket`);
 
     const systems = [];
     for (const pbaas of this.config.pbaas) {
       try {
-        const read = await this.readChain(pbaas, null, []);
+        const bridge = bridges.get(pbaas.id);
+        const read = await this.readChain(pbaas, null, bridge ? [bridge] : []);
         const result = computePrices({
           baskets: read.baskets,
           native: chain.id,
           anchor: chain.anchor,
           nativeUsd: nativeUsd ?? 0n,
           minRouteReserve: this.config.minRouteReserve,
+          bridges,
         });
         for (const [id, price] of result.prices) {
           if (!prices.has(id)) prices.set(id, { ...price, route: { ...price.route, system: pbaas.id } });

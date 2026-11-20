@@ -76,10 +76,12 @@ function reserveRoute(currencyId, baskets, referenceId, referenceUsd, toNative, 
  * @param {string} [input.anchorBasket] basket that sets the native USD price
  * @param {bigint} [input.nativeUsd] native USD price when it comes from another chain
  * @param {number|string} [input.minRouteReserve] minimum native reserve of a reserve-route basket
+ * @param {Map<string, string>} [input.bridges] PBaaS chain coin id -> its bridge basket id.
+ *   Such a coin takes its price only from its bridge basket.
  * @returns {{ nativeUsd: bigint|null, prices: Map<string, {name: string, usd: bigint, route: object}> }}
  */
 export function computePrices({
-  baskets, native, anchor, anchorBasket, nativeUsd, minRouteReserve = 0,
+  baskets, native, anchor, anchorBasket, nativeUsd, minRouteReserve = 0, bridges = new Map(),
 }) {
   const minReserve = parse(minRouteReserve);
   if (minReserve === null) throw new Error('minRouteReserve must be a non-negative decimal');
@@ -134,8 +136,10 @@ export function computePrices({
   const anchorToNative = (amount) => (usdNative ? div(amount, usdNative) : null);
   for (const id of reserveIds) {
     if (id === native || id === anchor || basketIds.has(id)) continue;
-    const route = reserveRoute(id, list, native, usdNative, (amount) => amount, minReserve)
-      || reserveRoute(id, list, anchor, ONE, anchorToNative, minReserve);
+    const bridge = bridges.get(id);
+    const pool = bridge ? list.filter((b) => b.currencyid === bridge) : list;
+    const route = reserveRoute(id, pool, native, usdNative, (amount) => amount, minReserve)
+      || reserveRoute(id, pool, anchor, ONE, anchorToNative, minReserve);
     if (route) {
       put(id, route.usd, {
         type: 'reserve', basket: route.basket, via: route.via, nativeReserve: format(route.nativeReserve),
