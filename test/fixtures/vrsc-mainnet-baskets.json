@@ -1,0 +1,287 @@
+{
+ "source": "getcurrency on https://api.verus.services, VRSC mainnet",
+ "height": 4330936,
+ "blocktime": 1795182410,
+ "baskets": [
+  {
+   "currencyid": "i3f7tSctFkiPpiedY8QR5Tep9p4qDVebDx",
+   "fullyqualifiedname": "Bridge.vETH",
+   "systemid": "i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV",
+   "options": 545,
+   "currencynames": {
+    "i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV": "VRSC",
+    "i9nwxtKuVYX4MSbeULLiK2ttVi6rUEhh4X": "vETH",
+    "iCkKJuJScy4Z6NSDK7Mt42ZAB2NEnAE1o4": "MKR.vETH",
+    "iGBs4DWztRNvNEJBt4mqHszLxfKTNHTkhM": "DAI.vETH"
+   },
+   "bestcurrencystate": {
+    "flags": 49,
+    "currencyid": "i3f7tSctFkiPpiedY8QR5Tep9p4qDVebDx",
+    "supply": 11696.99613984,
+    "reservecurrencies": [
+     {
+      "currencyid": "i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV",
+      "priceinreserve": 18.46869061,
+      "reserves": 54007.05071391,
+      "weight": 0.25
+     },
+     {
+      "currencyid": "iGBs4DWztRNvNEJBt4mqHszLxfKTNHTkhM",
+      "priceinreserve": 11.76339915,
+      "reserves": 34399.10864039,
+      "weight": 0.25
+     },
+     {
+      "currencyid": "iCkKJuJScy4Z6NSDK7Mt42ZAB2NEnAE1o4",
+      "priceinreserve": 0.00789921,
+      "reserves": 23.09927879,
+      "weight": 0.25
+     },
+     {
+      "currencyid": "i9nwxtKuVYX4MSbeULLiK2ttVi6rUEhh4X",
+      "priceinreserve": 0.0060974,
+      "reserves": 17.83032632,
+      "weight": 0.25
+     }
+    ]
+   }
+  },
+  {
+   "currencyid": "iHax5qYQGbcMGqJKKrPorpzUBX2oFFXGnY",
+   "fullyqualifiedname": "Pure",
+   "systemid": "i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV",
+   "options": 41,
+   "currencynames": {
+    "i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV": "VRSC",
+    "iS8TfRPfVpKo5FVfSUzfHBQxo9KuzpnqLU": "tBTC.vETH"
+   },
+   "bestcurrencystate": {
+    "flags": 49,
+    "currencyid": "iHax5qYQGbcMGqJKKrPorpzUBX2oFFXGnY",
+    "supply": 1054638.96046566,
+    "reservecurrencies": [
+     {
+      "currencyid": "i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV",
+      "priceinreserve": 6.41834027,
+      "reserves": 3384515.86027267,
+      "weight": 0.5
+     },
+     {
+      "currencyid": "iS8TfRPfVpKo5FVfSUzfHBQxo9KuzpnqLU",
+      "priceinreserve": 6.236e-05,
+      "reserves": 32.88543773,
+      "weight": 0.5
+     }
+    ]
+   }
+  },
+  {
+   "currencyid": "i9kVWKU2VwARALpbXn4RS9zvrhvNRaUibb",
+   "fullyqualifiedname": "Kaiju",
+   "systemid": "i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV",
+   "options": 41,
+   "currencynames": {
+    "i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV": "VRSC",
+    "i9nwxtKuVYX4MSbeULLiK2ttVi6rUEhh4X": "vETH",
+    "i9oCSqKALwJtcv49xUKS2U2i79h1kX6NEY": "vUSDT.vETH",
+    "iS8TfRPfVpKo5FVfSUzfHBQxo9KuzpnqLU": "tBTC.vETH"
+   },
+   "bestcurrencystate": {
+    "flags": 49,
+    "currencyid": "i9kVWKU2VwARALpbXn4RS9zvrhvNRaUibb",
+    "supply": 15843.38592517,
+    "reservecurrencies": [
+     {
+      "currencyid": "i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV",
+      "priceinreserve": 1.60089627,
+      "reserves": 6340.90437389,
+      "weight": 0.25
+     },
+     {
+      "currencyid": "i9oCSqKALwJtcv49xUKS2U2i79h1kX6NEY",
+      "priceinreserve": 1.02155348,
+      "reserves": 4046.21651507,
+      "weight": 0.25
+     },
+     {
+      "currencyid": "i9nwxtKuVYX4MSbeULLiK2ttVi6rUEhh4X",
+      "priceinreserve": 0.00052802,
+      "reserves": 2.09142064,
+      "weight": 0.25
+     },
+     {
+      "currencyid": "iS8TfRPfVpKo5FVfSUzfHBQxo9KuzpnqLU",
+      "priceinreserve": 1.553e-05,
+      "reserves": 0.06151358,
+      "weight": 0.25
+     }
+    ]
+   }
+  },
+  {
+   "currencyid": "i4Xr5TAMrDTD99H69EemhjDxJ4ktNskUtc",
+   "fullyqualifiedname": "Switch",
+   "systemid": "i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV",
+   "options": 33,
+   "currencynames": {
+    "i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV": "VRSC",
+    "i61cV2uicKSi1rSMQCBNQeSYC3UAi9GVzd": "vUSDC.vETH",
+    "iC5TQFrFXSYLQGkiZ8FYmZHFJzaRF5CYgE": "EURC.vETH",
+    "iGBs4DWztRNvNEJBt4mqHszLxfKTNHTkhM": "DAI.vETH"
+   },
+   "bestcurrencystate": {
+    "flags": 49,
+    "currencyid": "i4Xr5TAMrDTD99H69EemhjDxJ4ktNskUtc",
+    "supply": 10481.16386141,
+    "reservecurrencies": [
+     {
+      "currencyid": "i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV",
+      "priceinreserve": 2.88260379,
+      "reserves": 4834.08684344,
+      "weight": 0.16
+     },
+     {
+      "currencyid": "iGBs4DWztRNvNEJBt4mqHszLxfKTNHTkhM",
+      "priceinreserve": 1.8352605,
+      "reserves": 4039.48986975,
+      "weight": 0.21
+     },
+     {
+      "currencyid": "i61cV2uicKSi1rSMQCBNQeSYC3UAi9GVzd",
+      "priceinreserve": 1.83182169,
+      "reserves": 4031.9209142,
+      "weight": 0.21
+     },
+     {
+      "currencyid": "iC5TQFrFXSYLQGkiZ8FYmZHFJzaRF5CYgE",
+      "priceinreserve": 1.61371081,
+      "reserves": 7103.69834603,
+      "weight": 0.42
+     }
+    ]
+   }
+  },
+  {
+   "currencyid": "iD5WRg7jdQM1uuoVHsBCAEKfJCKGs1U3TB",
+   "fullyqualifiedname": "Bridge.vARRR",
+   "systemid": "iExBJfZYK7KREDpuhj6PzZBzqMAKaFg7d2",
+   "options": 545,
+   "currencynames": {
+    "i3f7tSctFkiPpiedY8QR5Tep9p4qDVebDx": "Bridge.vETH",
+    "i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV": "VRSC",
+    "iExBJfZYK7KREDpuhj6PzZBzqMAKaFg7d2": "vARRR",
+    "iS8TfRPfVpKo5FVfSUzfHBQxo9KuzpnqLU": "tBTC.vETH"
+   },
+   "bestcurrencystate": {
+    "flags": 49,
+    "currencyid": "iD5WRg7jdQM1uuoVHsBCAEKfJCKGs1U3TB",
+    "supply": 76634.18139223,
+    "reservecurrencies": [
+     {
+      "currencyid": "i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV",
+      "priceinreserve": 4.76827563,
+      "reserves": 91353.22493483,
+      "weight": 0.25
+     },
+     {
+      "currencyid": "iExBJfZYK7KREDpuhj6PzZBzqMAKaFg7d2",
+      "priceinreserve": 13.23326445,
+      "reserves": 253530.09724889,
+      "weight": 0.25
+     },
+     {
+      "currencyid": "i3f7tSctFkiPpiedY8QR5Tep9p4qDVebDx",
+      "priceinreserve": 0.25808023,
+      "reserves": 4944.44187275,
+      "weight": 0.25
+     },
+     {
+      "currencyid": "iS8TfRPfVpKo5FVfSUzfHBQxo9KuzpnqLU",
+      "priceinreserve": 4.633e-05,
+      "reserves": 0.88774036,
+      "weight": 0.25
+     }
+    ]
+   }
+  },
+  {
+   "currencyid": "i3nokiCTVevZMLpR3VmZ7YDfCqA5juUqqH",
+   "fullyqualifiedname": "Bridge.CHIPS",
+   "systemid": "iJ3WZocnjG9ufv7GKUA4LijQno5gTMb7tP",
+   "options": 545,
+   "currencynames": {
+    "i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV": "VRSC",
+    "iJ3WZocnjG9ufv7GKUA4LijQno5gTMb7tP": "CHIPS"
+   },
+   "bestcurrencystate": {
+    "flags": 49,
+    "currencyid": "i3nokiCTVevZMLpR3VmZ7YDfCqA5juUqqH",
+    "supply": 95373.49243926,
+    "reservecurrencies": [
+     {
+      "currencyid": "i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV",
+      "priceinreserve": 0.271095,
+      "reserves": 12927.63875275,
+      "weight": 0.5
+     },
+     {
+      "currencyid": "iJ3WZocnjG9ufv7GKUA4LijQno5gTMb7tP",
+      "priceinreserve": 5.13573762,
+      "reserves": 244906.61698615,
+      "weight": 0.5
+     }
+    ]
+   }
+  },
+  {
+   "currencyid": "i6j1rzjgrDhSmUYiTtp21J8Msiudv5hgt9",
+   "fullyqualifiedname": "Bridge.vDEX",
+   "systemid": "iHog9UCTrn95qpUBFCZ7kKz7qWdMA8MQ6N",
+   "options": 545,
+   "currencynames": {
+    "i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV": "VRSC",
+    "i9nwxtKuVYX4MSbeULLiK2ttVi6rUEhh4X": "vETH",
+    "iGBs4DWztRNvNEJBt4mqHszLxfKTNHTkhM": "DAI.vETH",
+    "iHog9UCTrn95qpUBFCZ7kKz7qWdMA8MQ6N": "vDEX",
+    "iS8TfRPfVpKo5FVfSUzfHBQxo9KuzpnqLU": "tBTC.vETH"
+   },
+   "bestcurrencystate": {
+    "flags": 49,
+    "currencyid": "i6j1rzjgrDhSmUYiTtp21J8Msiudv5hgt9",
+    "supply": 44924.68914295,
+    "reservecurrencies": [
+     {
+      "currencyid": "i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV",
+      "priceinreserve": 5.13579376,
+      "reserves": 46144.78769407,
+      "weight": 0.2
+     },
+     {
+      "currencyid": "iHog9UCTrn95qpUBFCZ7kKz7qWdMA8MQ6N",
+      "priceinreserve": 7.16007392,
+      "reserves": 64332.81903455,
+      "weight": 0.2
+     },
+     {
+      "currencyid": "i9nwxtKuVYX4MSbeULLiK2ttVi6rUEhh4X",
+      "priceinreserve": 0.00169195,
+      "reserves": 15.20209739,
+      "weight": 0.2
+     },
+     {
+      "currencyid": "iGBs4DWztRNvNEJBt4mqHszLxfKTNHTkhM",
+      "priceinreserve": 3.27459065,
+      "reserves": 29421.99341007,
+      "weight": 0.2
+     },
+     {
+      "currencyid": "iS8TfRPfVpKo5FVfSUzfHBQxo9KuzpnqLU",
+      "priceinreserve": 4.978e-05,
+      "reserves": 0.44730687,
+      "weight": 0.2
+     }
+    ]
+   }
+  }
+ ]
+}

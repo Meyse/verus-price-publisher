@@ -1,0 +1,34 @@
+# Example systemd unit. Adjust User, paths and the conf file location.
+# The user must be able to read the daemon conf file (for the RPC credentials)
+# and write the output folder.
+[Unit]
+Description=Verus price publisher
+After=network-online.target verusd.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=verus
+Group=verus
+WorkingDirectory=/opt/verus-price-publisher
+ExecStart=/usr/bin/node /opt/verus-price-publisher/src/main.js --config /etc/verus-price-publisher/config.json
+Restart=always
+RestartSec=10
+
+# Hardening: read-only system, write access only to the output folder.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/www/verus-prices
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+UMask=0022
+
+[Install]
+WantedBy=multi-user.target

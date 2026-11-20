@@ -1,0 +1,7 @@
+node_modules/
+out/
+# Local config files can hold RPC credentials.
+config.json
+*.local.json
+*.conf
+.env
