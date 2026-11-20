@@ -1,8 +1,10 @@
 // One publish cycle per new block: read basket states, compute prices,
 // write v1/prices.json atomically. On a failure the last file stays as it is.
 
-import { mkdir, open, readFile, rename, rm } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { writeFileAtomic } from './files.js';
+import { History } from './history.js';
 import { computePrices } from './prices.js';
 import { format } from './decimal.js';
 
@@ -10,23 +12,7 @@ export const SCHEMA_VERSION = 1;
 const FRACTIONAL = 1; // currency definition option
 const NOT_LIVE = 2 | 4; // currency state flags: PRELAUNCH | REFUNDING
 
-export async function writeFileAtomic(path, data) {
-  await mkdir(dirname(path), { recursive: true });
-  const temp = `${path}.${process.pid}.tmp`;
-  const handle = await open(temp, 'w', 0o644);
-  try {
-    await handle.writeFile(data);
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  try {
-    await rename(temp, path);
-  } catch (error) {
-    await rm(temp, { force: true });
-    throw error;
-  }
-}
+export { writeFileAtomic };
 
 export class Publisher {
   /**
@@ -48,11 +34,20 @@ export class Publisher {
     this.verified = new Set(); // chain ids whose RPC was checked
     this.failing = false;
     this.failingPbaas = new Set(); // PBaaS chain ids whose last read failed
+    this.history = config.history ? new History({
+      outDir: config.outDir,
+      chain: { name: config.chain.name, id: config.chain.id, testnet: config.chain.testnet },
+      anchor: { currency: config.chain.anchor, basket: config.chain.anchorBasket },
+      retentionDays: config.history.retentionDays,
+      log,
+    }) : null;
+    this.historyFailing = false;
   }
 
   // Serve the file of an earlier run (same schema and chain) and do not
   // republish its block: a restart must not make an old block look new.
   async loadExisting() {
+    if (this.history) await this.history.load(Math.floor(this.now() / 1000));
     try {
       const body = await readFile(this.path);
       const doc = JSON.parse(body.toString('utf8'));
@@ -84,6 +79,7 @@ export class Publisher {
       this.body = body;
       this.lastHash = hash;
       this.lastCycleAt = started;
+      await this.recordHistory(doc);
       // Calls of this cycle per RPC server (the poll that found the block is not included).
       const calls = Object.fromEntries(clients.map((client) => [client.label, client.resetCounts()]));
       if (this.failing) this.log('info', 'RPC is back; publishing again');
@@ -96,6 +92,21 @@ export class Publisher {
       if (!this.failing) this.log('error', `cycle failed, keeping the last file: ${error.message}`);
       this.failing = true;
       return false;
+    }
+  }
+
+  // Add a history sample when this cycle is the first of a new slot. A history write
+  // error is logged once and retried on the next cycle; prices.json is not affected.
+  async recordHistory(doc) {
+    if (!this.history) return;
+    try {
+      const recorded = await this.history.record(doc, doc.generatedAt);
+      if (recorded.length) this.log('info', `history: sample at height ${doc.height} for ${recorded.join(', ')}`);
+      if (this.historyFailing) this.log('info', 'history: writing again');
+      this.historyFailing = false;
+    } catch (error) {
+      if (!this.historyFailing) this.log('error', `history: cannot write: ${error.message}`);
+      this.historyFailing = true;
     }
   }
 

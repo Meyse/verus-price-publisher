@@ -7,6 +7,9 @@
   "minIntervalSeconds": 60,
   "basketListSeconds": 3600,
   "maxAgeSeconds": 900,
+  "minRouteReserve": 1000,
+  "history": true,
+  "historyRetentionDays": { "hour": 7, "day": 400, "week": 0 },
   "http": null,
   "pbaas": []
 }

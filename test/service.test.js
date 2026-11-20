@@ -127,7 +127,11 @@ test('conf file credentials are not sent to another host', async () => {
 
 test('the HTTP server serves only the price file, only for GET and HEAD', async (t) => {
   const body = Buffer.from('{"schemaVersion":1}\n');
-  const server = createPriceServer(() => body).listen(0, '127.0.0.1');
+  const routes = new Map([
+    ['/v1/prices.json', { body: () => body, maxAge: 30 }],
+    ['/v1/history/day.json', { body: () => body, maxAge: 3600 }],
+  ]);
+  const server = createPriceServer(routes).listen(0, '127.0.0.1');
   await once(server, 'listening');
   t.after(() => server.close());
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -141,6 +145,39 @@ test('the HTTP server serves only the price file, only for GET and HEAD', async 
   const post = await fetch(`${base}/v1/prices.json`, { method: 'POST', body: 'x' });
   assert.equal(post.status, 405);
   assert.equal(post.headers.get('allow'), 'GET, HEAD');
+  assert.equal((await fetch(`${base}/v1/history/day.json`)).headers.get('cache-control'), 'public, max-age=3600');
   assert.equal((await fetch(`${base}/v1/../config.json`)).status, 404);
+  assert.equal((await fetch(`${base}/__proto__`)).status, 404);
   assert.equal((await fetch(`${base}/`)).status, 404);
+});
+
+test('a failed cycle adds no history sample; the next good cycle in a new slot does', async (t) => {
+  const daemon = await fakeDaemon();
+  t.after(() => daemon.server.close());
+  const dir = await mkdtemp(join(tmpdir(), 'vpp-'));
+  await writeFile(join(dir, 'config.json'), JSON.stringify({
+    chain: 'VRSC', rpc: { url: `http://127.0.0.1:${daemon.port}` }, outDir: dir, minIntervalSeconds: 0,
+  }));
+  const config = loadConfig({ configPath: join(dir, 'config.json'), env: {} });
+  // The fake block time is 1790000000 + height; 1790002800 is a full hour (497223 * 3600).
+  let clock = (1790000000 + 100) * 1000;
+  const publisher = new Publisher(config, { now: () => clock });
+  const hourFile = join(dir, 'v1', 'history', 'hour.json');
+
+  assert.equal(await publisher.tick(), true);
+  const first = await readFile(hourFile, 'utf8');
+  assert.deepEqual(JSON.parse(first).time, [1789999200]); // slot of 1790000100
+
+  daemon.down = true;
+  daemon.hash = 'bb';
+  daemon.height = 2900;
+  clock = (1790000000 + 2900) * 1000; // past the next full hour
+  assert.equal(await publisher.tick(), false);
+  assert.equal(await readFile(hourFile, 'utf8'), first);
+
+  daemon.down = false;
+  assert.equal(await publisher.tick(), true);
+  const hour = JSON.parse(await readFile(hourFile, 'utf8'));
+  assert.deepEqual(hour.time, [1789999200, 1790002800]);
+  assert.deepEqual(hour.height, [100, 2900]);
 });

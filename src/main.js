@@ -4,7 +4,7 @@
 import { parseArgs } from 'node:util';
 import { loadConfig } from './config.js';
 import { Publisher } from './publisher.js';
-import { createPriceServer } from './server.js';
+import { createPriceServer, publisherRoutes } from './server.js';
 
 const log = (level, message) => {
   const line = `${new Date().toISOString()} ${level} ${message}`;
@@ -45,13 +45,13 @@ await publisher.loadExisting();
 
 let server = null;
 if (config.http) {
-  server = createPriceServer(() => publisher.body);
+  server = createPriceServer(publisherRoutes(publisher));
   server.on('error', (error) => {
     log('error', `HTTP server: ${error.message}`);
     process.exit(1);
   });
   server.listen(config.http.port, config.http.host, () => {
-    log('info', `serving http://${config.http.host}:${server.address().port}/v1/prices.json`);
+    log('info', `serving http://${config.http.host}:${server.address().port}/v1/`);
   });
 }
 

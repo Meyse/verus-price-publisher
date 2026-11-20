@@ -39,6 +39,8 @@ const DEFAULTS = {
   basketListSeconds: 3600,
   maxAgeSeconds: 900,
   minRouteReserve: 1000,
+  history: true,
+  historyRetentionDays: { hour: 7, day: 400, week: 0 },
   http: null,
 };
 
@@ -85,6 +87,19 @@ function rpcClient(rpc = {}, { defaultConf, defaultPort, env = {} }) {
     password: env.VERUS_RPC_PASSWORD ?? conf.rpcpassword,
     timeoutMs: number(rpc.timeoutSeconds ?? 15, 'rpc.timeoutSeconds', 1) * 1000,
   });
+}
+
+function historyConfig(merged) {
+  if (merged.history === false) return null;
+  if (merged.history !== true) throw new Error('Config "history" must be true or false');
+  const days = { ...DEFAULTS.historyRetentionDays, ...merged.historyRetentionDays };
+  return {
+    retentionDays: {
+      hour: number(days.hour, 'historyRetentionDays.hour', 0),
+      day: number(days.day, 'historyRetentionDays.day', 0),
+      week: number(days.week, 'historyRetentionDays.week', 0),
+    },
+  };
 }
 
 /**
@@ -140,6 +155,7 @@ export function loadConfig({ configPath, chain, env = process.env } = {}) {
     basketListMs: number(merged.basketListSeconds, 'basketListSeconds', 60) * 1000,
     maxAgeSeconds: number(merged.maxAgeSeconds, 'maxAgeSeconds', 60),
     minRouteReserve: String(number(merged.minRouteReserve, 'minRouteReserve', 0)),
+    history: historyConfig(merged),
     http,
   };
 }
