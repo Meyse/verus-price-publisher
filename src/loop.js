@@ -3,6 +3,7 @@
 // since the last cycle runs: a check that comes too early waits until the interval ends.
 
 const MAX_DELAY = 2 ** 31 - 1; // setTimeout limit (about 24.8 days)
+const NOTIFY_GAP_MS = 1000; // notifications start at most one check per second
 
 export class Loop {
   /**
@@ -24,6 +25,7 @@ export class Loop {
     this.running = false;
     this.pendingAt = Infinity; // a check asked for while one was running
     this.stopped = false;
+    this.lastRunAt = -Infinity;
   }
 
   start() {
@@ -36,9 +38,19 @@ export class Loop {
     this.timer = null;
   }
 
-  // A block notification: check at once, or when the minimum interval ends.
+  // A block notification: check at once, or when the minimum interval ends. A flood of
+  // notifications starts at most one check per second.
   notify() {
-    this.wake(this.publisher.nextCycleAt());
+    const now = this.publisher.now();
+    // min(): after the clock went back, the last run does not block notifications.
+    this.wake(Math.max(this.publisher.nextCycleAt(), Math.min(this.lastRunAt, now) + NOTIFY_GAP_MS));
+  }
+
+  // Change the regular poll (for example: the safety poll while ZMQ is connected, the
+  // normal poll while it is not). A shorter poll takes effect at once.
+  setPoll(pollMs) {
+    this.pollMs = pollMs;
+    this.wake(Math.max(this.publisher.now() + pollMs, this.publisher.nextCycleAt()));
   }
 
   // Plan a check at `at` (ms), unless one is already planned at or before that time.
@@ -59,6 +71,7 @@ export class Loop {
     this.timer = null;
     this.dueAt = Infinity;
     this.running = true;
+    this.lastRunAt = this.publisher.now();
     try {
       await this.publisher.tick();
     } catch (error) {

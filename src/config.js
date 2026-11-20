@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join, resolve } from 'node:path';
 import { RpcClient, readDaemonConf } from './rpc.js';
+import { parseZmqAddress } from './zmq.js';
 
 const dataDir = (name) => (platform() === 'darwin'
   ? join(homedir(), 'Library', 'Application Support', 'Komodo', name)
@@ -39,7 +40,7 @@ export const PUBLIC_PBAAS = {
 };
 
 const POLL_SECONDS = 30;
-const SAFETY_POLL_SECONDS = 300; // with block notification
+const SAFETY_POLL_SECONDS = 300; // with block notification (file, or ZMQ while connected)
 
 const DEFAULTS = {
   baskets: 'auto',
@@ -183,6 +184,19 @@ export function loadConfig({ configPath, chain, env = process.env } = {}) {
   if (notifyPath !== null && (typeof notifyPath !== 'string' || !notifyPath)) {
     throw new Error('Config "blockNotifyFile" must be a file path');
   }
+  const zmq = env.BLOCK_NOTIFY_ZMQ ?? merged.blockNotifyZmq ?? null;
+  if (zmq !== null) {
+    try {
+      parseZmqAddress(zmq);
+    } catch (error) {
+      throw new Error(`Config "blockNotifyZmq" ${error.message}`);
+    }
+  }
+  if (notifyPath !== null && zmq !== null) {
+    throw new Error('Set only one of "blockNotifyFile" and "blockNotifyZmq"');
+  }
+  // With the notify file the regular poll is the safety poll. With ZMQ the normal poll runs
+  // while ZMQ is not connected, and the safety poll while it is.
   const pollSeconds = merged.pollSeconds === undefined ? (notifyPath ? SAFETY_POLL_SECONDS : POLL_SECONDS) : merged.pollSeconds;
   if (number(pollSeconds, 'pollSeconds', 1) > 86400) throw new Error('Config "pollSeconds" must be at most 86400');
   let http = null;
@@ -198,6 +212,8 @@ export function loadConfig({ configPath, chain, env = process.env } = {}) {
     outDir: resolve(env.OUT_DIR ?? merged.outDir),
     pollMs: number(pollSeconds, 'pollSeconds', 1) * 1000,
     blockNotifyFile: notifyPath ? resolve(notifyPath) : null,
+    blockNotifyZmq: zmq,
+    safetyPollMs: Math.max(SAFETY_POLL_SECONDS * 1000, number(pollSeconds, 'pollSeconds', 1) * 1000),
     minIntervalMs: number(merged.minIntervalSeconds, 'minIntervalSeconds', 0) * 1000,
     basketListMs: number(merged.basketListSeconds, 'basketListSeconds', 60) * 1000,
     maxAgeSeconds: number(merged.maxAgeSeconds, 'maxAgeSeconds', 60),

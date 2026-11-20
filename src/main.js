@@ -7,6 +7,7 @@ import { loadConfig } from './config.js';
 import { Loop } from './loop.js';
 import { Publisher } from './publisher.js';
 import { createPriceServer, publisherRoutes } from './server.js';
+import { ZmqSubscriber } from './zmq.js';
 
 const log = (level, message) => {
   const line = `${new Date().toISOString()} ${level} ${message}`;
@@ -75,9 +76,26 @@ if (notifyFile) {
   log('info', `block notification: watching ${notifyFile}; safety poll every ${config.pollMs / 1000} s`);
 }
 
+// Block notification over ZMQ: each "hashblock" message starts a check. While connected
+// only the safety poll runs; while not connected, the normal poll.
+let zmq = null;
+if (config.blockNotifyZmq) {
+  zmq = new ZmqSubscriber({
+    address: config.blockNotifyZmq,
+    log,
+    onMessage: () => loop.notify(),
+    onConnect: () => loop.setPoll(config.safetyPollMs),
+    onDisconnect: () => loop.setPoll(config.pollMs),
+  });
+  zmq.start();
+  log('info', `block notification: ZMQ ${config.blockNotifyZmq}; poll every ${config.pollMs / 1000} s until `
+    + `connected, then every ${config.safetyPollMs / 1000} s`);
+}
+
 const stop = (signal) => {
   log('info', `${signal}: stopping`);
   loop.stop();
+  zmq?.stop();
   if (notifyFile) unwatchFile(notifyFile);
   if (server) server.close();
   setTimeout(() => process.exit(0), 2000).unref();

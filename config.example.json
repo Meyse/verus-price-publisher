@@ -4,6 +4,7 @@
   "baskets": "auto",
   "outDir": "/var/www/verus-prices",
   "pollSeconds": 30,
+  "blockNotifyZmq": null,
   "blockNotifyFile": null,
   "minIntervalSeconds": 60,
   "basketListSeconds": 3600,
