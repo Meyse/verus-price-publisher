@@ -31,10 +31,19 @@ export const PRESETS = {
   },
 };
 
+// PBaaS chains with a public API, for VRSC mainnet. Turn one on by name: "pbaas": ["vARRR"].
+export const PUBLIC_PBAAS = {
+  vARRR: { id: 'iExBJfZYK7KREDpuhj6PzZBzqMAKaFg7d2', url: 'https://vapi.piratechain.com/' },
+  CHIPS: { id: 'iJ3WZocnjG9ufv7GKUA4LijQno5gTMb7tP', url: 'https://api.chips.cash/' },
+  vDEX: { id: 'iHog9UCTrn95qpUBFCZ7kKz7qWdMA8MQ6N', url: 'https://api.vdex.to/' },
+};
+
+const POLL_SECONDS = 30;
+const SAFETY_POLL_SECONDS = 300; // with block notification
+
 const DEFAULTS = {
   baskets: 'auto',
   outDir: './out',
-  pollSeconds: 10,
   minIntervalSeconds: 60,
   basketListSeconds: 3600,
   maxAgeSeconds: 900,
@@ -89,6 +98,38 @@ function rpcClient(rpc = {}, { defaultConf, defaultPort, env = {} }) {
   });
 }
 
+// A pbaas entry: a built-in name ("vARRR"), or { name, id, rpc } for any chain or an own
+// daemon. A built-in name with its own "rpc" uses that daemon instead of the public API.
+function pbaasEntry(raw, i, mainId) {
+  const entry = typeof raw === 'string' ? { name: raw } : raw;
+  if (!entry || typeof entry !== 'object' || typeof entry.name !== 'string' || !entry.name) {
+    throw new Error(`Config pbaas[${i}] needs a name`);
+  }
+  const key = Object.keys(PUBLIC_PBAAS).find((k) => k.toLowerCase() === entry.name.toLowerCase());
+  const builtIn = key ? PUBLIC_PBAAS[key] : null;
+  const id = entry.id ?? builtIn?.id;
+  const rpc = entry.rpc ?? (builtIn ? { url: builtIn.url } : undefined);
+  if (!id || !rpc) {
+    throw new Error(`Config pbaas[${i}] "${entry.name}" is not a built-in name `
+      + `(${Object.keys(PUBLIC_PBAAS).join(', ')}): give name, id and rpc`);
+  }
+  if (builtIn && (entry.id === undefined || entry.rpc === undefined) && mainId !== PRESETS.VRSC.id) {
+    throw new Error(`Config pbaas[${i}] "${key}": the built-in entries are for VRSC mainnet`);
+  }
+  const publicApi = entry.rpc === undefined;
+  // Default: only the chain's bridge basket (found from chain data), never listcurrencies.
+  const list = entry.baskets === undefined ? [] : baskets(entry.baskets, `pbaas[${i}].baskets`);
+  if (publicApi && list === 'auto') {
+    throw new Error(`Config pbaas[${i}] "${key}": "auto" is not allowed on a public API (it calls listcurrencies)`);
+  }
+  return {
+    name: key ?? entry.name,
+    id,
+    baskets: list,
+    rpc: rpcClient(rpc, { defaultConf: null, defaultPort: null }),
+  };
+}
+
 function historyConfig(merged) {
   if (merged.history === false) return null;
   if (merged.history !== true) throw new Error('Config "history" must be true or false');
@@ -127,18 +168,14 @@ export function loadConfig({ configPath, chain, env = process.env } = {}) {
       defaultConf: preset?.conf(), defaultPort: preset?.rpcPort ?? 27486, env,
     }),
   };
-  const pbaas = (file.pbaas ?? []).map((entry, i) => {
-    if (!entry?.id || !entry?.name || !entry?.rpc) {
-      throw new Error(`Config pbaas[${i}] needs name, id and rpc`);
-    }
-    return {
-      name: entry.name,
-      id: entry.id,
-      // Default: only the chain's bridge basket (found from chain data), never listcurrencies.
-      baskets: entry.baskets === undefined ? [] : baskets(entry.baskets, `pbaas[${i}].baskets`),
-      rpc: rpcClient(entry.rpc, { defaultConf: null, defaultPort: null }),
-    };
-  });
+  const pbaasList = file.pbaas ?? (env.VERUS_PBAAS ? env.VERUS_PBAAS.split(',').map((s) => s.trim()).filter(Boolean) : []);
+  if (!Array.isArray(pbaasList)) throw new Error('Config "pbaas" must be a list');
+  const pbaas = pbaasList.map((entry, i) => pbaasEntry(entry, i, main.id));
+  const notifyPath = env.BLOCK_NOTIFY_FILE ?? merged.blockNotifyFile ?? null;
+  if (notifyPath !== null && (typeof notifyPath !== 'string' || !notifyPath)) {
+    throw new Error('Config "blockNotifyFile" must be a file path');
+  }
+  const pollSeconds = merged.pollSeconds ?? (notifyPath ? SAFETY_POLL_SECONDS : POLL_SECONDS);
   let http = null;
   if (merged.http || env.HTTP_PORT) {
     http = {
@@ -150,7 +187,8 @@ export function loadConfig({ configPath, chain, env = process.env } = {}) {
     chain: main,
     pbaas,
     outDir: resolve(env.OUT_DIR ?? merged.outDir),
-    pollMs: number(merged.pollSeconds, 'pollSeconds', 1) * 1000,
+    pollMs: number(pollSeconds, 'pollSeconds', 1) * 1000,
+    blockNotifyFile: notifyPath ? resolve(notifyPath) : null,
     minIntervalMs: number(merged.minIntervalSeconds, 'minIntervalSeconds', 0) * 1000,
     basketListMs: number(merged.basketListSeconds, 'basketListSeconds', 60) * 1000,
     maxAgeSeconds: number(merged.maxAgeSeconds, 'maxAgeSeconds', 60),

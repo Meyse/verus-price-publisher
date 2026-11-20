@@ -76,17 +76,28 @@ export class Publisher {
     }
   }
 
-  // Poll once. Run a cycle when the best block changed and the minimum
-  // interval has passed. Never throws; a failure keeps the last file.
+  // True when the minimum interval since the last cycle has passed. A negative
+  // time means the clock went back: do not wait for it to catch up.
+  cycleAllowed() {
+    const elapsed = this.now() - this.lastCycleAt;
+    return elapsed < 0 || elapsed >= this.config.minIntervalMs;
+  }
+
+  // The earliest time (ms) at which a check can run a cycle.
+  nextCycleAt() {
+    return this.cycleAllowed() ? this.now() : this.lastCycleAt + this.config.minIntervalMs;
+  }
+
+  // Check once. While the minimum interval runs, return at once without an RPC call.
+  // Then poll, and run a cycle when the best block changed. Never throws (except for a
+  // wrong chain); a failure keeps the last file.
   async tick({ force = false } = {}) {
     const { rpc } = this.config.chain;
+    if (!force && !this.cycleAllowed()) return false;
     try {
       await this.verifyChain(this.config.chain);
       const hash = await rpc.call('getbestblockhash');
       if (!force && hash === this.lastHash) return false;
-      const elapsed = this.now() - this.lastCycleAt;
-      // A negative value means the clock went back: do not wait for it to catch up.
-      if (!force && elapsed >= 0 && elapsed < this.config.minIntervalMs) return false;
       const started = this.now();
       const clients = [rpc, ...this.config.pbaas.map((c) => c.rpc)];
       clients.forEach((client) => client.resetCounts());
