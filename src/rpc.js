@@ -75,7 +75,7 @@ export class RpcClient {
         redirect: 'error',
       });
     } catch (error) {
-      throw new RpcError(`${method}: ${error.cause?.code ?? error.name}`);
+      throw new RpcError(`${method}: ${error.cause?.code ?? error.cause?.message ?? error.name}`);
     }
     let body = null;
     try {

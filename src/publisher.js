@@ -46,6 +46,7 @@ export class Publisher {
     this.basketLists = new Map(); // chain id -> { ids, at }
     this.verified = new Set(); // chain ids whose RPC was checked
     this.failing = false;
+    this.failingPbaas = new Set(); // PBaaS chain ids whose last read failed
   }
 
   // Serve the file of an earlier run (same schema and chain) and do not
@@ -181,9 +182,14 @@ export class Publisher {
         systems.push({
           name: pbaas.name, id: pbaas.id, height: read.header.height, blockTime: read.header.time,
         });
+        if (this.failingPbaas.delete(pbaas.id)) this.log('info', `${pbaas.name}: prices are back`);
       } catch (error) {
         if (error.fatal) throw error;
-        this.log('warn', `${pbaas.name}: no prices this cycle: ${error.message}`);
+        // Log the first failure and the recovery, not every block.
+        if (!this.failingPbaas.has(pbaas.id)) {
+          this.log('warn', `${pbaas.name}: no prices until it answers again: ${error.message}`);
+        }
+        this.failingPbaas.add(pbaas.id);
       }
     }
 
