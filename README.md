@@ -28,10 +28,10 @@ of wallets.
    In that time after a cycle the service makes no RPC call at all; the first poll after
    it is the one at the end of the interval. When two blocks come within one poll period,
    only the newer one is published.
-2. With [block notification](#block-notification-optional) the daemon tells the service
-   about each new block, and the check runs at once. A notification inside the minimum
-   interval waits until the interval ends. The regular poll becomes a slow safety poll
-   (default 300 s).
+2. With [block notification](#block-notification-optional) (ZMQ or a notify file) the
+   daemon tells the service about each new block, and the check runs at once. A
+   notification inside the minimum interval waits until the interval ends. The regular
+   poll becomes a slow safety poll (300 s).
 3. On a new block it runs a cycle: `getblockheader` for the height and time, then one
    `getcurrency` per basket.
 4. The basket list comes from `listcurrencies {"systemtype":"local"}`, at most once per
@@ -88,7 +88,8 @@ Polls per hour, measured on VRSCTEST (about 1 block per minute):
 | Mode | Polls per hour |
 |---|---|
 | Default: poll every 30 s, no poll in the 60 s after a cycle | about 100 |
-| Block notification, safety poll every 300 s | about 35 |
+| Notify file, safety poll every 300 s | about 35 |
+| ZMQ connected, safety poll every 300 s | about 30 |
 
 Total calls per hour at 1 block per minute (60 cycles), with the default polling:
 
@@ -122,7 +123,7 @@ These are Bridge.vETH, Pure, Kaiju and Switch. The anchor basket is always read,
 when it is not in the list. A currency that is only in baskets outside the list gets no
 price.
 
-To lower the load further: turn on block notification, raise `minIntervalSeconds`, or set
+To lower the load further: turn on [block notification](#block-notification-optional), raise `minIntervalSeconds`, or set
 a fixed `baskets` list.
 
 ## Install
@@ -183,16 +184,59 @@ The conf-file mount does not have that exposure.
 
 ## Block notification (optional)
 
-Without it the service polls every 30 s, and the daemon's config stays as it is.
+There are three modes. The default needs no change to the daemon.
 
-With it, the daemon's `blocknotify` command touches a file at each new block. The service
-watches the file's time (one `stat` per second, no RPC call) and then checks the daemon at
-once. The file carries no data: the service always asks the daemon for the best block, and
-the minimum interval still applies. The service needs only read access to the file.
+| Mode | Daemon conf line | Tool config key (env) | Polls per hour (measured) | A new block is seen |
+|---|---|---|---|---|
+| Poll (default) | none | none | about 100 | at the next poll, at most 30 s later |
+| ZMQ | `zmqpubhashblock=tcp://127.0.0.1:28332` | `blockNotifyZmq` (`BLOCK_NOTIFY_ZMQ`) | about 30 | about 1 s after the daemon publishes it |
+| Notify file | `blocknotify=touch /var/lib/verus-blocknotify/VRSC` | `blockNotifyFile` (`BLOCK_NOTIFY_FILE`) | about 35 | within 1 s |
 
-The channel is a file and not a signal, because a signal from the daemon's user to a
-service that runs as another user needs root, and a signal into a container needs Docker
-access.
+Set at most one of the two keys; with both, the service stops at start with a config
+error. A new line in the daemon conf takes effect when the daemon restarts. In both
+notification modes the notification is only a trigger: the service then asks the daemon
+for the best block with `getbestblockhash`, as in the default mode. No check runs inside
+`minIntervalSeconds` after a cycle, and notifications start at most one check per second.
+
+### ZMQ
+
+At each new block the daemon publishes a `hashblock` message on a ZMQ socket. The service
+connects to that socket with its own small ZMQ subscriber (ZMTP 3.0, NULL mechanism, no
+library) and subscribes to `hashblock`. In `VRSC.conf`:
+
+```ini
+zmqpubhashblock=tcp://127.0.0.1:28332
+```
+
+In the service's `config.json`:
+
+```json
+"blockNotifyZmq": "tcp://127.0.0.1:28332"
+```
+
+- While ZMQ is connected, only a safety poll runs: every 300 s, or every `pollSeconds` if
+  that is longer. While it is not connected (the daemon restarts, the port refuses, the
+  link breaks), the service polls every `pollSeconds` (default 30 s) and tries to
+  reconnect every 5 s. It logs a lost connection once and a new connection once.
+- Only `tcp://host:port` addresses. A frame over 4 KiB, a message with more than 16
+  frames, or malformed data drops the connection; the service then reconnects.
+- Use the `zmqpubhashblock` address. An address that publishes no `hashblock` messages
+  (for example only `zmqpubhashtx`) still connects, and then the service sees new blocks
+  only at the safety poll.
+- The ZMQ socket has no authentication. Bind it to `127.0.0.1` or to another address that
+  is not public.
+- Docker: the container must reach the ZMQ port. On Linux with `--network host`,
+  `tcp://127.0.0.1:28332` works. Without host networking, the daemon must bind the ZMQ
+  socket on an address that the container can reach (`-e BLOCK_NOTIFY_ZMQ=tcp://<that
+  address>:28332`), and that address must not be public.
+
+### Notify file
+
+The daemon's `blocknotify` command touches a file at each new block. The service watches
+the file's time (one `stat` per second, no RPC call). The file carries no data, and the
+service needs only read access to it. The channel is a file and not a signal, because a
+signal from the daemon's user to a service that runs as another user needs root, and a
+signal into a container needs Docker access.
 
 Make a folder that the daemon's user can write and the service can read:
 
@@ -223,10 +267,9 @@ docker run ... \
   verus-price-publisher --chain VRSC
 ```
 
-The daemon reads `blocknotify` when it starts. With `blockNotifyFile` set, `pollSeconds`
-defaults to 300. At start the service logs `block notification: watching <file>`. If the
-file never changes (for example a wrong path), the service still publishes at each safety
-poll.
+With `blockNotifyFile` set, `pollSeconds` defaults to 300. At start the service logs
+`block notification: watching <file>`. If the file never changes (for example a wrong
+path), the service still publishes at each safety poll.
 
 ## Configuration
 
@@ -245,8 +288,9 @@ the defaults.
 | `rpc.timeoutSeconds` | 15 | Timeout for one RPC call. |
 | `baskets` | `"auto"` | `"auto"` (from `listcurrencies`) or a list of basket ids or names. Ids avoid a double read. |
 | `outDir` | `./out` | The file goes to `<outDir>/v1/prices.json`. |
-| `pollSeconds` | 30; 300 with `blockNotifyFile` | How often to check for a new block. No check calls the daemon in the minimum interval after a cycle. |
-| `blockNotifyFile` | `null` (off) | File that the daemon's `blocknotify` command touches. See [Block notification](#block-notification-optional). |
+| `pollSeconds` | 30; 300 with `blockNotifyFile` | How often to check for a new block. No check calls the daemon in the minimum interval after a cycle. With `blockNotifyZmq`, this poll runs while ZMQ is not connected. |
+| `blockNotifyZmq` | `null` (off) | The daemon's `zmqpubhashblock` address, `tcp://host:port`. See [Block notification](#block-notification-optional). |
+| `blockNotifyFile` | `null` (off) | File that the daemon's `blocknotify` command touches. Not together with `blockNotifyZmq`. |
 | `minIntervalSeconds` | 60 | Minimum time between two cycles. |
 | `basketListSeconds` | 3600 | How often to refresh the basket list (minimum 60). |
 | `maxAgeSeconds` | 900 | Copied into the file as `maxAge`: the age after which clients should not show the prices. |
@@ -258,7 +302,7 @@ the defaults.
 
 Environment variables: `VERUS_CHAIN`, `VERUS_RPC_CONF`, `VERUS_RPC_URL`, `VERUS_RPC_USER`,
 `VERUS_RPC_PASSWORD` (main chain only; the user and password override the conf file),
-`OUT_DIR`, `HTTP_PORT`, `HTTP_HOST`, `BLOCK_NOTIFY_FILE`, and `VERUS_PBAAS` (built-in
+`OUT_DIR`, `HTTP_PORT`, `HTTP_HOST`, `BLOCK_NOTIFY_ZMQ`, `BLOCK_NOTIFY_FILE`, and `VERUS_PBAAS` (built-in
 PBaaS names, comma-separated, used when the config file has no `pbaas`).
 
 ### PBaaS chains
@@ -549,6 +593,10 @@ come from JSON numbers, so they keep about 15 to 16 significant digits (the daem
   path to a file on disk.
 - The block notification file is only watched with `stat`; its content is never read. A
   process that can touch it can start at most one check per `minIntervalSeconds`.
+- The ZMQ subscriber acts only on messages whose first frame is `hashblock`, and it uses
+  none of their content. A peer on the ZMQ address can start at most one
+  `getbestblockhash` per second, never inside `minIntervalSeconds`. Its input is bounded
+  (4 KiB per frame, 16 frames per message).
 - A built-in PBaaS entry sends no credentials. `"auto"` is refused for a public API.
 - The output holds only public chain data.
 
@@ -601,6 +649,21 @@ Tested on 2026-11-20:
   less: two blocks came 14 s apart, and one poll saw only the newer one.
   In notification mode a test harness touched the file at each new block; a touch inside
   the minimum interval waited until the interval ended.
+- ZMQ subscriber against real libzmq 4.3.5 (pyzmq 27.3.0, a test harness outside the
+  repo), with the real service process and a fake daemon. libzmq received the
+  subscription frame `\x01hashblock`. Each `hashblock` message in the daemon's layout
+  started one cycle (about 50 ms after the message, outside the minimum interval). A
+  10,000-octet `rawblock` message on the same socket was filtered by the publisher. A
+  repeated `hashblock` without a new block cost 1 `getbestblockhash` and no cycle. With
+  libzmq stopped, the service polled every 30 s, and it reconnected 5 s after libzmq came
+  back. With libzmq heartbeats on (100 ms, timeout 400 ms) the connection stayed up.
+- ZMQ against a VRSCTEST daemon with `zmqpubhashblock=tcp://127.0.0.1:28332`, 12 minutes
+  (6 blocks), side by side with the poll and notify-file modes through counting proxies.
+  The daemon's messages had 3 frames: `hashblock` (9 octets), the block hash (32) and a
+  little-endian sequence number (4). The handshake with the daemon's libzmq worked. Each
+  message started one cycle about 1 s later, or at the end of the minimum interval.
+  Polls: poll mode 21, notify file 6, ZMQ 6. First publish after the daemon's message:
+  ZMQ about 1 s, notify file 1 to 4 s (touched by a test harness), poll mode 11 to 21 s.
 - Built-in PBaaS names (`VERUS_PBAAS=vARRR,CHIPS,vDEX`, `--once`, local VRSC daemon): vARRR
   and CHIPS were priced from their bridge baskets through their public APIs (4 calls each
   in the first cycle). vDEX answered HTTP 502; it was left out with one warning and the
@@ -609,7 +672,7 @@ Tested on 2026-11-20:
   chain, vDEX prices (its public API did not answer during the tests), the systemd unit, the Linux
   `--network host` Docker command, the nginx and Caddy snippets, a history run over days
   with the real clock, a real `blocknotify=` line in a daemon config (the notification
-  was sent by a test harness).
+  was sent by a test harness), ZMQ from a container, ZMQ on a VRSC mainnet daemon.
 
 Known limits:
 
