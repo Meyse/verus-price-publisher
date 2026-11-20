@@ -14,11 +14,6 @@ the number of wallets.
   never logged and never written to the output.
 - A thin basket cannot set the price of another currency: a reserve route needs at least
   `minRouteReserve` (default 1,000) native coins in the basket.
-- **Frozen baskets look like quiet baskets.** On 2026-11-20 all 27 mainnet basket states
-  were unchanged over blocks 4330959 to 4330965, and the 4 known baskets (Bridge.vETH,
-  Pure, Kaiju, Switch) were also unchanged since block 4330936. The service cannot tell a
-  frozen basket from one that simply had no conversions. It publishes the last on-chain
-  price with a fresh block height.
 - PBaaS chain coins (vARRR, CHIPS, vDEX) take their price only from their own bridge
   basket on their own chain. They need a `pbaas` entry; see [PBaaS chains](#pbaas-chains).
 
@@ -234,14 +229,9 @@ How the prices combine:
   recovery once. The service checks each chain's `chainid` with `getblockchaininfo` and
   stops on a mismatch.
 
-Why not the imported copy on the main chain (data of 2026-11-20): `getcurrency Bridge.vARRR`
-on VRSC gives the state at vARRR height 1173210 (`bestheight`, equal to
-`lastconfirmedheight`). It holds no time, and the vARRR chain was at height 1341292, so the
-copy was about 168,000 vARRR blocks (about 116 days at 60 s) old. For CHIPS: 4611363 against
-5649874, about 1,038,000 blocks (about 120 days at 10 s). The copy priced vARRR at 0.2295;
-the bridge on vARRR gave 0.2281 (−0.6 %): its VRSC reserve had moved from 91,353 to 91,124
-after the last state that reached VRSC. The VRSC daemon alone cannot see the age of the copy
-in time, so the service does not use it.
+Why not the imported copy on the main chain: the main chain's copy of a bridge basket
+carries a height of the PBaaS chain (`bestheight`) and no time. The service cannot know the
+age of that state, so it does not use it.
 
 ## Serving the file
 
@@ -362,8 +352,8 @@ come from JSON numbers, so they keep about 15 to 16 significant digits (the daem
   Error messages hold the method name and the daemon's error text, never the request.
   Credentials in `rpc.url` are refused. Redirects are refused. The conf file's credentials
   are sent only to `127.0.0.1`, `localhost`, `::1` or the conf's own `rpchost`; for another
-  host the service stops at start-up unless `VERUS_RPC_USER` and `VERUS_RPC_PASSWORD` are set. `.gitignore` excludes `config.json`, `*.local.json`
-  and `*.conf`.
+  host the service stops at start-up unless `VERUS_RPC_USER` and `VERUS_RPC_PASSWORD` are
+  set. `.gitignore` excludes `config.json`, `*.local.json` and `*.conf`.
 - At start-up the service checks that the daemon's `chainid` is the configured chain and
   stops if it is not. A reply without a `chainid` counts as a failed call.
 - The built-in HTTP server serves one in-memory file. It reads no paths from the request.
@@ -386,12 +376,9 @@ come from JSON numbers, so they keep about 15 to 16 significant digits (the daem
 - In "auto" mode some reserve prices come from a different basket than with the fixed list,
   because a basket with a larger VRSC reserve holds them: vETH (NATI🦉, −0.08 %),
   vUSDC.vETH (Floralis, −0.41 %), vUSDT.vETH (Floralis, +0.05 %), EURC.vETH (Floralis, −0.03 %).
-- Basket states on 2026-11-20: all 27 mainnet basket states (reserves, prices, supply and
-  conversion fields) were identical at blocks 4330959, 4330961, 4330963 and 4330965. The 4
-  known baskets were also identical to the public API read at block 4330936. The other 23
-  were not read at 4330936. The prices did not move (frozen baskets).
 - `minRouteReserve` 1,000 on mainnet (block 4330974 and one new block, before the PBaaS
-  coin rule): 41 prices instead of 50, no other price changed. The 9 without a price: Bears, Bulls (Traders, 336 VRSC),
+  coin rule): 41 prices instead of 50, no other price changed. The 9 without a price:
+  Bears, Bulls (Traders, 336 VRSC),
   bitcoins (🟠, 100 VRSC), Bridge.CHIPS, Bridge.vARRR, Bridge.vDEX (Ⓐ, 307 VRSC),
   pepecoin.vETH (Kek🐸, 535 VRSC), vLINK.vETH, vwBTC.vETH (motb, 715 VRSC). On VRSCTEST:
   111 prices instead of 137.
@@ -416,30 +403,24 @@ come from JSON numbers, so they keep about 15 to 16 significant digits (the daem
   chain, vDEX, systemd unit.
 - Known limit: the header is read before the baskets. If a new block arrives during the
   reads (under a second), some states can be one block newer than `height`. This was seen
-  once on mainnet (2 of 27 states one block newer); the states were unchanged.
+  once on mainnet (2 of 27 states one block newer).
 - Thin baskets: without the minimum, Ⓐ (307 VRSC in reserve) priced Bridge.vARRR at 2.83
   (3.03 on its own chain) and Bridge.vDEX at 3.47 (3.27), and motb (715 VRSC) priced
   vwBTC.vETH at 52,388 (tBTC.vETH: 65,556). With the default of 1,000 VRSC these get no
   price. Bridge.vARRR, Bridge.CHIPS and Bridge.vDEX then need a `pbaas` entry for their
-  chain (best with an own daemon, see [PBaaS chains](#pbaas-chains)) for a price. A basket's own price (rule 3) has no minimum, so a thin
-  basket still shows a price for its own unit.
+  chain (best with an own daemon, see [PBaaS chains](#pbaas-chains)) for a price. A
+  basket's own price (rule 3) has no minimum, so a thin basket keeps a price for its own unit.
 
 ## Open questions for the Verus developers
 
 - Is one published price file acceptable? Who hosts it, and on which domain?
 - Anchor rule: is DAI.vETH = 1 USD acceptable?
-- Frozen baskets: on 2026-11-20 every mainnet basket state was unchanged over the blocks of
-  the test (all 27 over blocks 4330959 to 4330965; the 4 known baskets since 4330936). The
-  service cannot tell a frozen basket from a quiet one, so it publishes the last on-chain
-  price with a fresh block height. Is that acceptable, or must the daemon expose a
-  "conversions disabled" state the service can read?
-- Which PBaaS chains must it cover at the start? Today a PBaaS coin needs a `pbaas` entry
+- Which PBaaS chains must it cover at the start? A PBaaS coin needs a `pbaas` entry
   (own daemon or public API).
 - Is the imported copy of a bridge basket on VRSC acceptable as a fallback for a VRSC-only
-  node? On 2026-11-20 it was about 4 months behind its own chain (vARRR −0.6 %), and the
-  VRSC daemon gives its age only as a height on the other chain. The service does not use
-  it today. If the daemon exposed the time of that state, a fallback with an age limit
-  would be simple.
+  node? The VRSC daemon gives its age only as a height on the other chain, so the service
+  does not use it. If the daemon exposed the time of that state, a fallback with an age
+  limit would be simple.
 - Is about 28 `getcurrency` calls per block on mainnet (about 2,040 calls per hour)
   acceptable, or should the default be a fixed basket list?
 - Is 1,000 VRSC the right default for `minRouteReserve`? It removes 9 of 50 mainnet prices.
