@@ -24,9 +24,14 @@ the number of wallets.
    fixed list instead (`"baskets": [...]`); then `listcurrencies` is never called.
 4. It computes all prices in one pass (see [Price rules](#price-rules)) and writes
    `v1/prices.json` atomically (temporary file, `fsync`, rename).
-5. If an RPC call fails, the cycle stops. The last file stays as it is and its times do
-   not move, so clients see the age and can stop showing the price. The next poll tries
-   again. The service logs the first failure and the recovery, not every failed poll.
+5. If any RPC call fails (also a single basket read), the cycle stops. No partial file is
+   written. The last file stays as it is and its times do not move, so clients see the age
+   and can stop showing the price. The next poll tries again. The service logs the first
+   failure and the recovery, not every failed poll. An unknown id in a fixed `baskets` list
+   therefore stops publishing until you fix the list.
+6. After a restart the service serves the saved file (if it has the same schema, chain and
+   anchor) and does not rewrite it until a new block arrives, so a restart does not make an
+   old block look new.
 
 ## Node load (measured)
 
@@ -221,7 +226,9 @@ Or turn on the built-in server (`http` in the config) and proxy to it. It serves
 
 Ported from Verus Mobile (`onChainPriceMath.js`). Uses
 `bestcurrencystate.reservecurrencies[].priceinreserve`, the price of one basket unit in
-that reserve. The math uses exact decimal fixed-point numbers (BigInt, 24 decimals).
+that reserve. The math uses decimal fixed-point numbers (BigInt, 24 decimals). The inputs
+come from JSON numbers, so they keep about 15 to 16 significant digits (the daemon sends
+8 decimals; a value above about 10^7 can lose its last satoshi digit).
 
 1. Native USD = `priceinreserve[anchor] / priceinreserve[native]` in the anchor basket.
 2. The anchor = 1 USD.
@@ -243,10 +250,12 @@ that reserve. The math uses exact decimal fixed-point numbers (BigInt, 24 decima
   other method before any network request. No wallet method is on the list.
 - Credentials stay inside the RPC client and go only into the `Authorization` header.
   Error messages hold the method name and the daemon's error text, never the request.
-  Credentials in `rpc.url` are refused. `.gitignore` excludes `config.json`, `*.local.json`
+  Credentials in `rpc.url` are refused. Redirects are refused. The conf file's credentials
+  are sent only to `127.0.0.1`, `localhost`, `::1` or the conf's own `rpchost`; for another
+  host the service stops at start-up unless `VERUS_RPC_USER` and `VERUS_RPC_PASSWORD` are set. `.gitignore` excludes `config.json`, `*.local.json`
   and `*.conf`.
 - At start-up the service checks that the daemon's `chainid` is the configured chain and
-  stops if it is not.
+  stops if it is not. A reply without a `chainid` counts as a failed call.
 - The built-in HTTP server serves one in-memory file. It reads no paths from the request.
 - The output holds only public chain data.
 
@@ -260,6 +269,8 @@ that reserve. The math uses exact decimal fixed-point numbers (BigInt, 24 decima
 - Mainnet: one single run against `https://api.verus.services` with the fixed basket list,
   no `listcurrencies`. All 12 VRSC-chain prices matched the 2026-11-01 worked example within 0.1 %.
 - Not verified: PBaaS chains, mainnet `"baskets": "auto"`, Docker image, systemd unit.
+- Known limit: the header is read before the baskets. If a new block arrives during the
+  reads (they take under a second), some states can be one block newer than `height`.
 
 ## Open questions for the Verus developers
 

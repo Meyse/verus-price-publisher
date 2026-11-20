@@ -69,6 +69,15 @@ function rpcClient(rpc = {}, { defaultConf, defaultPort, env = {} }) {
   const port = conf.rpcport || defaultPort;
   const url = rpc.url ?? env.VERUS_RPC_URL ?? (port ? `http://${host}:${port}` : null);
   if (!url) throw new Error('Set rpc.url, or rpc.conf with an rpcport line');
+  // Send the conf file's credentials only to this machine or to the conf's own rpchost.
+  const urlHost = new URL(url).hostname.replace(/^\[|\]$/g, '');
+  const daemonHosts = ['127.0.0.1', 'localhost', '::1', host];
+  const confAuth = (conf.rpcuser && env.VERUS_RPC_USER === undefined)
+    || (conf.rpcpassword && env.VERUS_RPC_PASSWORD === undefined);
+  if (confAuth && !daemonHosts.includes(urlHost)) {
+    throw new Error(`Refusing to send the conf file's RPC credentials to ${urlHost}. `
+      + 'Remove rpc.conf, or set VERUS_RPC_USER and VERUS_RPC_PASSWORD for that host.');
+  }
   return new RpcClient({
     url,
     user: env.VERUS_RPC_USER ?? conf.rpcuser,

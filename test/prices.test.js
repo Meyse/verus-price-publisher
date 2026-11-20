@@ -80,11 +80,14 @@ test('bad basket data gives no price and does not throw', () => {
     refunding: basket('iB8', [reserve(N, 1), reserve(T, 1)], { flags: 1 | 4 }),
     noReserveList: basket('iB9', 'not a list'),
     noState: { currencyid: 'iB10' },
+    textFlags: basket('iB11', [reserve(N, 1), reserve(T, 1)], { flags: 'unknown' }),
   };
+  const oddName = { ...basket('iODD', [reserve(N, 1)]), fullyqualifiedname: { x: 1 } };
   for (const [name, bad] of Object.entries(cases)) {
     const { prices } = computePrices({
-      baskets: [anchorBasket, bad, null, 7], native: N, anchor: A, anchorBasket: 'iANCHORBASKET',
+      baskets: [anchorBasket, bad, null, 7, oddName], native: N, anchor: A, anchorBasket: 'iANCHORBASKET',
     });
+    assert.equal(prices.get('iODD').name, 'iODD');
     assert.equal(prices.has(T), false, `${name}: token has no price`);
     if (!['zeroPrice', 'missingPrice', 'negativePrice', 'textPrice', 'nanPrice'].includes(name)) {
       assert.equal(prices.has(bad.currencyid), false, `${name}: basket has no price`);

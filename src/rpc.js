@@ -4,13 +4,14 @@
 
 import { readFileSync } from 'node:fs';
 
-export const ALLOWED_METHODS = Object.freeze(new Set([
+// Private on purpose: no other module can add a method.
+const ALLOWED_METHODS = new Set([
   'getblockchaininfo',
   'getbestblockhash',
   'getblockheader',
   'getcurrency',
   'listcurrencies',
-]));
+]);
 
 export class RpcError extends Error {}
 
@@ -83,9 +84,7 @@ export class RpcClient {
       // The daemon sends an empty or HTML body for 401 and some other errors.
     }
     if (body?.error) {
-      const error = new RpcError(`${method}: ${String(body.error.message ?? 'error').slice(0, 200)}`);
-      error.fromDaemon = true; // The daemon answered; the connection works.
-      throw error;
+      throw new RpcError(`${method}: ${String(body.error.message ?? 'error').slice(0, 200)}`);
     }
     if (!response.ok || !body || !('result' in body)) {
       throw new RpcError(`${method}: HTTP ${response.status}`);

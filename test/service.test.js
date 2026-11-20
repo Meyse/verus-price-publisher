@@ -16,13 +16,13 @@ const fixture = JSON.parse(readFileSync(new URL('./fixtures/vrsc-mainnet-baskets
 
 // A fake verusd on the network boundary. It answers from the mainnet fixture.
 async function fakeDaemon() {
-  const daemon = { requests: [], down: false, hash: 'aa', height: 100, auth: null };
+  const daemon = { requests: [], down: false, failCurrency: null, hash: 'aa', height: 100 };
   daemon.server = createServer(async (req, res) => {
     let body = '';
     for await (const chunk of req) body += chunk;
     const { method, params } = JSON.parse(body);
     daemon.requests.push({ method, auth: req.headers.authorization });
-    if (daemon.down) {
+    if (daemon.down || (method === 'getcurrency' && params[0] === daemon.failCurrency)) {
       res.writeHead(500).end(JSON.stringify({ result: null, error: { code: -28, message: 'Loading' } }));
       return;
     }
@@ -93,11 +93,36 @@ test('publishes once per block, keeps the last file while the RPC fails, and rec
   assert.equal(await readFile(file, 'utf8'), first);
   assert.equal(logs.filter((l) => l.startsWith('error')).length, 1); // logged once, not on every poll
 
+  // The daemon answers, but one basket read fails: still no partial file.
   daemon.down = false;
+  daemon.failCurrency = 'iHax5qYQGbcMGqJKKrPorpzUBX2oFFXGnY'; // Pure
+  assert.equal(await publisher.tick(), false);
+  assert.equal(await readFile(file, 'utf8'), first);
+
+  daemon.failCurrency = null;
   assert.equal(await publisher.tick(), true);
-  assert.equal(JSON.parse(await readFile(file, 'utf8')).height, 101);
+  const second = await readFile(file, 'utf8');
+  assert.equal(JSON.parse(second).height, 101);
   assert.deepEqual((await readdir(join(dir, 'v1'))), ['prices.json']); // no temp file left
   assert.ok(!logs.join('\n').includes('s3cret'));
+
+  // A restart on the same block serves the saved file and does not rewrite it.
+  const restarted = new Publisher(config);
+  await restarted.loadExisting();
+  assert.equal(restarted.body.toString('utf8'), second);
+  assert.equal(await restarted.tick(), false);
+  assert.equal(await readFile(file, 'utf8'), second);
+});
+
+test('conf file credentials are not sent to another host', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'vpp-'));
+  const conf = join(dir, 'VRSC.conf');
+  await writeFile(conf, 'rpcuser=alice\nrpcpassword=s3cret\nrpcport=27486\n');
+  assert.throws(
+    () => loadConfig({ chain: 'VRSC', env: { VERUS_RPC_CONF: conf, VERUS_RPC_URL: 'https://api.example.org' } }),
+    /Refusing to send the conf file's RPC credentials to api\.example\.org/,
+  );
+  assert.doesNotThrow(() => loadConfig({ chain: 'VRSC', env: { VERUS_RPC_CONF: conf } }));
 });
 
 test('the HTTP server serves only the price file, only for GET and HEAD', async (t) => {

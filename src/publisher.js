@@ -48,12 +48,17 @@ export class Publisher {
     this.failing = false;
   }
 
-  // Serve the file of an earlier run until the first new cycle. Its times are old.
+  // Serve the file of an earlier run (same schema and chain) and do not
+  // republish its block: a restart must not make an old block look new.
   async loadExisting() {
     try {
       const body = await readFile(this.path);
-      JSON.parse(body.toString('utf8'));
+      const doc = JSON.parse(body.toString('utf8'));
+      const { chain } = this.config;
+      if (doc?.schemaVersion !== SCHEMA_VERSION || doc.chain?.id !== chain.id
+        || doc.anchor?.currency !== chain.anchor || doc.anchor?.basket !== chain.anchorBasket) return;
       this.body = body;
+      if (typeof doc.blockHash === 'string') this.lastHash = doc.blockHash;
     } catch {
       // No usable earlier file.
     }
@@ -64,6 +69,7 @@ export class Publisher {
   async tick({ force = false } = {}) {
     const { rpc } = this.config.chain;
     try {
+      await this.verifyChain(this.config.chain);
       const hash = await rpc.call('getbestblockhash');
       if (!force && hash === this.lastHash) return false;
       if (!force && this.now() - this.lastCycleAt < this.config.minIntervalMs) return false;
@@ -94,9 +100,10 @@ export class Publisher {
   async verifyChain(chain) {
     if (this.verified.has(chain.id)) return;
     const info = await chain.rpc.call('getblockchaininfo');
-    if (info?.chainid && info.chainid !== chain.id) {
-      const error = new Error(`RPC at ${chain.rpc.label} serves chain ${info.chainid} `
-        + `(${info.name}), not ${chain.name} ${chain.id}`);
+    if (typeof info?.chainid !== 'string') throw new Error('getblockchaininfo: no chainid');
+    if (info.chainid !== chain.id) {
+      const error = new Error(`RPC at ${chain.rpc.label} serves chain ${info.chainid}, `
+        + `not ${chain.name} ${chain.id}`);
       error.fatal = true;
       throw error;
     }
@@ -114,8 +121,9 @@ export class Publisher {
     const ids = list
       .filter((entry) => {
         const def = entry?.currencydefinition;
-        const flags = Number(entry?.bestcurrencystate?.flags ?? 0);
-        return def && (def.options & FRACTIONAL) && !(flags & NOT_LIVE);
+        const flags = entry?.bestcurrencystate?.flags;
+        return def && (def.options & FRACTIONAL) && Number.isInteger(flags) && !(flags & NOT_LIVE)
+          && typeof def.currencyid === 'string';
       })
       .map((entry) => entry.currencydefinition.currencyid);
     this.basketLists.set(chain.id, { ids, at: this.now() });
@@ -123,19 +131,12 @@ export class Publisher {
     return [...new Set([...extra, ...ids])];
   }
 
-  // Read each basket once. A currency the daemon does not know is skipped;
-  // a connection failure fails the cycle.
+  // Read each basket once. Any failed read fails the cycle, so a partial
+  // file is never published (an unknown id in a fixed list fails every cycle).
   async readBaskets(chain, ids) {
     const baskets = [];
     for (const id of ids) {
-      let def;
-      try {
-        def = await chain.rpc.call('getcurrency', [id]);
-      } catch (error) {
-        if (!error.fromDaemon) throw error;
-        this.log('warn', `${chain.name}: skipped ${id}: ${error.message}`);
-        continue;
-      }
+      const def = await chain.rpc.call('getcurrency', [id]);
       if (def?.systemid !== chain.id) continue; // imported states can be stale
       if (Array.isArray(def?.bestcurrencystate?.reservecurrencies)) baskets.push(def);
     }
@@ -143,7 +144,7 @@ export class Publisher {
   }
 
   async readChain(chain, hash, extra) {
-    await this.verifyChain(chain);
+    await this.verifyChain(chain); // no-op for the main chain after tick() checked it
     const blockHash = hash ?? await chain.rpc.call('getbestblockhash');
     const header = await chain.rpc.call('getblockheader', [blockHash]);
     if (!Number.isInteger(header?.height)) throw new Error('getblockheader: unexpected result');

@@ -11,7 +11,8 @@ const NOT_LIVE = 2 | 4;
 function liveReserves(definition) {
   const state = definition?.bestcurrencystate;
   if (!state || typeof state !== 'object') return [];
-  if ((Number(state.flags) & NOT_LIVE) !== 0 || definition.prelaunch === true) return [];
+  if (!Number.isInteger(state.flags) || (state.flags & NOT_LIVE) !== 0) return [];
+  if (definition.prelaunch === true) return [];
   if (!positive(state.supply)) return [];
   return Array.isArray(state.reservecurrencies) ? state.reservecurrencies : [];
 }
@@ -75,15 +76,16 @@ export function computePrices({ baskets, native, anchor, anchorBasket, nativeUsd
   const list = (Array.isArray(baskets) ? baskets : [])
     .filter((b) => b && typeof b === 'object' && typeof b.currencyid === 'string');
 
+  const text = (value) => (typeof value === 'string' && value ? value : null);
   const names = new Map();
   for (const basket of list) {
-    names.set(basket.currencyid, basket.fullyqualifiedname || basket.name || basket.currencyid);
+    names.set(basket.currencyid, text(basket.fullyqualifiedname) ?? text(basket.name) ?? basket.currencyid);
   }
   for (const basket of list) {
     const map = basket.currencynames;
     if (!map || typeof map !== 'object') continue;
     for (const [id, name] of Object.entries(map)) {
-      if (!names.has(id) && typeof name === 'string') names.set(id, name);
+      if (!names.has(id) && text(name)) names.set(id, name);
     }
   }
   const nameOf = (id) => names.get(id) ?? id;
