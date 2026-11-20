@@ -24,8 +24,8 @@ export const PRESETS = {
     name: 'VRSCTEST',
     id: 'iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq',
     testnet: true,
-    anchor: 'iFawzbS99RqGs7J2TNxME1TmmayBGuRkA2', // USD
-    anchorBasket: 'i4QdaEnkSxkAK4FRhRJcq7V7WgRN2XhzMD', // VRSC-USD
+    anchor: 'iN9vbHXexEh6GTZ45fRoJGKTQThfbgUwMh', // DAI.vETH (testnet)
+    anchorBasket: 'iSojYsotVzXz4wh2eJriASGo6UidJDDhL2', // Bridge.vETH (testnet)
     rpcPort: 18843,
     conf: () => join(dataDir('vrsctest'), 'vrsctest.conf'),
   },

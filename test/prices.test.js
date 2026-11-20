@@ -105,3 +105,18 @@ test('bad basket data gives no price and does not throw', () => {
   assert.equal(nativeUsd, null);
   assert.deepEqual([...prices.keys()], [A]); // only the anchor itself
 });
+
+test('the VRSCTEST preset prices through DAI.vETH in Bridge.vETH', async () => {
+  const { loadConfig } = await import('../src/config.js');
+  const { chain } = loadConfig({ chain: 'VRSCTEST', env: { VERUS_RPC_URL: 'http://127.0.0.1:1' } });
+  const testnet = JSON.parse(readFileSync(new URL('./fixtures/vrsctest-bridge-veth.json', import.meta.url)));
+  const { prices } = computePrices({
+    baskets: testnet.baskets, native: chain.id, anchor: chain.anchor, anchorBasket: chain.anchorBasket,
+  });
+  // Hand calculation with bc -l: VRSCTEST = 7.09025643 / 13.19790409;
+  // vETH = 13.19790409 / 0.00346814 * VRSCTEST.
+  assert.equal(format(prices.get(chain.id).usd), '0.537225939941');
+  assert.equal(format(prices.get(chain.anchor).usd), '1');
+  assert.equal(format(prices.get(chain.anchorBasket).usd), '7.09025643');
+  assert.equal(format(prices.get('iCtawpxUiCc2sEupt7Z4u8SDAncGZpgSKm').usd), '2044.39740899');
+});

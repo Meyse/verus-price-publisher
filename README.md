@@ -13,6 +13,27 @@ the number of wallets.
 - RPC credentials come from the daemon conf file or environment variables. They are
   never logged and never written to the output.
 
+### Basket discovery and its cost (read this first)
+
+By default (`"baskets": "auto"`) the service finds the baskets itself: once per hour it
+calls `listcurrencies {"systemtype":"local"}` and keeps every live local basket. Then each
+new block costs **1 `getblockheader` + 1 `getcurrency` per live basket**, plus one
+`getbestblockhash` every 10 s. On VRSCTEST (91 live baskets) that is about 5,900 calls per
+hour. On VRSC mainnet the cost is the same formula with the mainnet basket count, which is
+not measured yet.
+
+To read only the baskets you choose, set a fixed list in the config file. Then
+`listcurrencies` is never called and each block costs 1 + the number of listed baskets:
+
+```json
+"baskets": ["i3f7tSctFkiPpiedY8QR5Tep9p4qDVebDx", "iHax5qYQGbcMGqJKKrPorpzUBX2oFFXGnY",
+            "i9kVWKU2VwARALpbXn4RS9zvrhvNRaUibb", "i4Xr5TAMrDTD99H69EemhjDxJ4ktNskUtc"]
+```
+
+These are Bridge.vETH, Pure, Kaiju and Switch: 5 calls per block, about 660 calls per hour.
+The anchor basket is always read, also when it is not in the list. See
+[Node load](#node-load-measured) for the measurements.
+
 ## How it works
 
 1. Every `pollSeconds` (default 10 s) the service calls `getbestblockhash`.
@@ -35,7 +56,7 @@ the number of wallets.
 
 ## Node load (measured)
 
-Measured on the local VRSCTEST daemon (Verus 1.2.18) on 2026-11-20, with the counters the
+Measured against a VRSCTEST daemon (Verus 1.2.18) on 2026-11-20, with the counters the
 service logs after each cycle (`calls {...}` in the log).
 
 | | RPC calls |
@@ -48,12 +69,12 @@ service logs after each cycle (`calls {...}` in the log).
 VRSCTEST has 91 live baskets: **92 calls per cycle** (plus the poll that found the block).
 With the defaults and one block per minute that is about
 360 polls + 60 × 92 + 1 = **5,881 calls per hour**, the same for 1 wallet or 1 million.
-A cycle took 390 to 470 ms on the test machine (about 600 ms when it also refreshed the basket list).
+A cycle took 200 to 470 ms on the test machine (about 600 ms when it also refreshed the basket list).
 
 VRSC mainnet with the four known VRSC baskets as a fixed list (Bridge.vETH, Pure, Kaiju,
 Switch): 5 calls per cycle, about 660 calls per hour. The mainnet count with
 `"baskets": "auto"` is not measured (the public API test did not call `listcurrencies`);
-it is 2 + the number of live local baskets per cycle.
+it is 1 + the number of live local baskets per cycle, plus the polls.
 
 To lower the load: raise `pollSeconds` or `minIntervalSeconds`, or set a fixed `baskets` list.
 
@@ -63,7 +84,7 @@ To lower the load: raise `pollSeconds` or `minIntervalSeconds`, or set a fixed `
 
 ```sh
 sudo useradd --system --home /opt/verus-price-publisher verus   # or use the user that runs verusd
-sudo git clone <repo-url> /opt/verus-price-publisher
+sudo git clone https://github.com/Meyse/verus-price-publisher.git /opt/verus-price-publisher
 sudo mkdir -p /etc/verus-price-publisher /var/www/verus-prices
 sudo cp /opt/verus-price-publisher/config.example.json /etc/verus-price-publisher/config.json
 sudo chown verus /var/www/verus-prices
@@ -108,8 +129,8 @@ the defaults.
 | `chain` | `VRSC` | Preset: `VRSC` or `VRSCTEST`. For another chain, also set `id`, `anchor`, `anchorBasket`. |
 | `id` | from preset | i-address of the chain's native currency. |
 | `testnet` | from preset | Copied into the file. |
-| `anchor` | VRSC: DAI.vETH `iGBs4DWztRNvNEJBt4mqHszLxfKTNHTkhM`; VRSCTEST: USD `iFawzbS99RqGs7J2TNxME1TmmayBGuRkA2` | Currency counted as exactly 1 USD. |
-| `anchorBasket` | VRSC: Bridge.vETH `i3f7tSctFkiPpiedY8QR5Tep9p4qDVebDx`; VRSCTEST: VRSC-USD `i4QdaEnkSxkAK4FRhRJcq7V7WgRN2XhzMD` | Basket that sets the native USD price. Always read. |
+| `anchor` | VRSC: DAI.vETH `iGBs4DWztRNvNEJBt4mqHszLxfKTNHTkhM`; VRSCTEST: DAI.vETH `iN9vbHXexEh6GTZ45fRoJGKTQThfbgUwMh` | Currency counted as exactly 1 USD. |
+| `anchorBasket` | VRSC: Bridge.vETH `i3f7tSctFkiPpiedY8QR5Tep9p4qDVebDx`; VRSCTEST: Bridge.vETH `iSojYsotVzXz4wh2eJriASGo6UidJDDhL2` | Basket that sets the native USD price. Always read. |
 | `rpc.conf` | the daemon's default conf path (`~/.komodo/VRSC/VRSC.conf`, `~/.komodo/vrsctest/vrsctest.conf`) | Reads `rpcuser`, `rpcpassword`, `rpcport`, `rpchost`. |
 | `rpc.url` | `http://<rpchost>:<rpcport>` | RPC URL. Credentials in the URL are refused. |
 | `rpc.timeoutSeconds` | 15 | Timeout for one RPC call. |
@@ -264,11 +285,11 @@ come from JSON numbers, so they keep about 15 to 16 significant digits (the daem
 - Unit and integration tests: `node --test test/*.test.js` (price math against the
   2026-11-01 worked example, bad data, the allow-list, the publish/failure/recovery cycle
   against a fake daemon, the HTTP server).
-- Live: VRSCTEST daemon on 2026-11-20, several new blocks; VRSCTEST price checked by hand
-  against the raw VRSC-USD basket state.
+- Live: VRSCTEST daemon on 2026-11-20, several new blocks. VRSCTEST, DAI.vETH and
+  Bridge.vETH prices checked by hand against the raw Bridge.vETH basket state.
 - Mainnet: one single run against `https://api.verus.services` with the fixed basket list,
   no `listcurrencies`. All 12 VRSC-chain prices matched the 2026-11-01 worked example within 0.1 %.
-- Not verified: PBaaS chains, mainnet `"baskets": "auto"`, Docker image, systemd unit.
+- Not verified: PBaaS chains, mainnet `"baskets": "auto"`, Docker image (not built), systemd unit.
 - Known limit: the header is read before the baskets. If a new block arrives during the
   reads (they take under a second), some states can be one block newer than `height`.
 
@@ -280,7 +301,6 @@ come from JSON numbers, so they keep about 15 to 16 significant digits (the daem
 - Which PBaaS chains must it cover at the start? Should a VRSC-only node use the imported
   states of Bridge.vARRR, Bridge.CHIPS and Bridge.vDEX (close to, but behind, the PBaaS
   chain's own state), or must each PBaaS chain have its own daemon?
-- VRSCTEST preset: the anchor is USD in VRSC-USD. Is that the right testnet anchor?
 - Is about 92 `getcurrency` calls per block on testnet acceptable, or should the default
   be a fixed basket list?
 

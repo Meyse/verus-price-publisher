@@ -1,0 +1,49 @@
+{
+ "source": "getcurrency Bridge.vETH on a VRSCTEST daemon",
+ "height": 1326828,
+ "baskets": [
+  {
+   "currencyid": "iSojYsotVzXz4wh2eJriASGo6UidJDDhL2",
+   "fullyqualifiedname": "Bridge.vETH",
+   "systemid": "iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq",
+   "options": 545,
+   "currencynames": {
+    "iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq": "VRSCTEST",
+    "iN9vbHXexEh6GTZ45fRoJGKTQThfbgUwMh": "DAI.vETH",
+    "i3WBJ7xEjTna5345D7gPnK4nKfbEBujZqL": "MKR.vETH",
+    "iCtawpxUiCc2sEupt7Z4u8SDAncGZpgSKm": "vETH"
+   },
+   "bestcurrencystate": {
+    "flags": 49,
+    "currencyid": "iSojYsotVzXz4wh2eJriASGo6UidJDDhL2",
+    "supply": 14147.66083307,
+    "reservecurrencies": [
+     {
+      "currencyid": "iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq",
+      "weight": 0.25,
+      "reserves": 46679.8676944,
+      "priceinreserve": 13.19790409
+     },
+     {
+      "currencyid": "iN9vbHXexEh6GTZ45fRoJGKTQThfbgUwMh",
+      "weight": 0.25,
+      "reserves": 25077.63581784,
+      "priceinreserve": 7.09025643
+     },
+     {
+      "currencyid": "i3WBJ7xEjTna5345D7gPnK4nKfbEBujZqL",
+      "weight": 0.25,
+      "reserves": 13.6929058,
+      "priceinreserve": 0.00387142
+     },
+     {
+      "currencyid": "iCtawpxUiCc2sEupt7Z4u8SDAncGZpgSKm",
+      "weight": 0.25,
+      "reserves": 12.26653719,
+      "priceinreserve": 0.00346814
+     }
+    ]
+   }
+  }
+ ]
+}
