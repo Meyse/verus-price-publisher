@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, readdir } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { History } from '../src/history.js';
@@ -92,4 +92,26 @@ test('a cycle whose block time is far from the clock records nothing', async () 
   const history = newHistory(dir);
   assert.deepEqual(await history.record(doc(T0 - 86400, 1, { iA: '1' }), T0), []); // daemon still syncing
   assert.equal(history.body('hour'), null);
+});
+
+test('review fixes: bad values in a saved file move it aside; odd ids and a missing block time', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'vpp-history-'));
+  await newHistory(dir).record(doc(T0, 1, { iA: '1' }), T0);
+  const path = join(dir, 'v1', 'history', 'hour.json');
+  const saved = JSON.parse(await readFile(path, 'utf8'));
+  await writeFile(path, JSON.stringify({ ...saved, usd: { iA: ['1'] } })); // a string, not a number
+  const reloaded = newHistory(dir);
+  await reloaded.load(T0 + 3600);
+  assert.equal(reloaded.body('hour'), null);
+  await writeFile(path, JSON.stringify({ ...saved, time: [T0 + 5] })); // not a slot start
+  await newHistory(dir).load(T0 + 3601);
+  assert.deepEqual((await readdir(join(dir, 'v1', 'history'))).filter((f) => f.startsWith('hour')).sort(),
+    ['hour.json.replaced-1795186800', 'hour.json.replaced-1795186801']);
+
+  const odd = newHistory(dir);
+  assert.deepEqual(await odd.record({ height: 1, prices: prices({ iA: '1' }) }, T0), []); // no block time
+  await odd.record(doc(T0, 2, Object.fromEntries([['constructor', '2'], ['__proto__', '3'], ['toString', '4']])), T0);
+  const hour = await readJson(dir, 'hour');
+  assert.deepEqual(Object.keys(hour.usd).sort(), ['__proto__', 'constructor', 'toString']);
+  assert.equal(hour.names.constructor, 'name-constructor');
 });

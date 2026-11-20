@@ -76,8 +76,8 @@ function reserveRoute(currencyId, baskets, referenceId, referenceUsd, toNative, 
  * @param {string} [input.anchorBasket] basket that sets the native USD price
  * @param {bigint} [input.nativeUsd] native USD price when it comes from another chain
  * @param {number|string} [input.minRouteReserve] minimum native reserve of a reserve-route basket
- * @param {Map<string, string>} [input.bridges] PBaaS chain coin id -> its bridge basket id.
- *   Such a coin takes its price only from its bridge basket.
+ * @param {Map<string, string|null>} [input.bridges] PBaaS chain coin id -> its bridge basket id.
+ *   Such a coin takes its price only from its bridge basket; with null it has no price.
  * @returns {{ nativeUsd: bigint|null, prices: Map<string, {name: string, usd: bigint, route: object}> }}
  */
 export function computePrices({
@@ -136,8 +136,11 @@ export function computePrices({
   const anchorToNative = (amount) => (usdNative ? div(amount, usdNative) : null);
   for (const id of reserveIds) {
     if (id === native || id === anchor || basketIds.has(id)) continue;
-    const bridge = bridges.get(id);
-    const pool = bridge ? list.filter((b) => b.currencyid === bridge) : list;
+    let pool = list;
+    if (bridges.has(id)) {
+      const bridge = bridges.get(id);
+      pool = list.filter((b) => b.currencyid === bridge);
+    }
     const route = reserveRoute(id, pool, native, usdNative, (amount) => amount, minReserve)
       || reserveRoute(id, pool, anchor, ONE, anchorToNative, minReserve);
     if (route) {

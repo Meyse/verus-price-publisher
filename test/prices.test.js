@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { computePrices } from '../src/prices.js';
 import { format } from '../src/decimal.js';
+import { pbaasMaySet } from '../src/publisher.js';
 
 const VRSC = 'i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV';
 const DAI = 'iGBs4DWztRNvNEJBt4mqHszLxfKTNHTkhM';
@@ -161,4 +162,12 @@ test('a PBaaS chain coin takes its price only from its own bridge basket', () =>
   assert.equal(viaBridge.route.basket, 'iBRIDGE');
   assert.equal(run([big], bridges).has(C), false); // bridge not read (main chain): no price
   assert.equal(run([big, thinBridge], bridges).has(C), false); // 10 native < 1000
+  assert.equal(run([big, bridge], new Map([[C, null]])).has(C), false); // configured chain without a bridge
+
+  // Only the coin's own chain may set its price, and only through its bridge basket.
+  const own = viaBridge;
+  assert.equal(pbaasMaySet(C, own, C, bridges), true);
+  assert.equal(pbaasMaySet(C, own, 'iOTHERCHAIN', bridges), false);
+  assert.equal(pbaasMaySet(C, { ...own, route: { type: 'basket', basket: C } }, C, bridges), false);
+  assert.equal(pbaasMaySet(T, { route: { type: 'reserve', basket: 'iX' } }, 'iOTHERCHAIN', bridges), true);
 });

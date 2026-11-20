@@ -31,6 +31,8 @@ try {
 const publisher = new Publisher(config, { log });
 log('info', `chain ${config.chain.name}, RPC ${config.chain.rpc.label}, output ${publisher.path}`);
 
+await publisher.loadExisting();
+
 if (values.once) {
   try {
     const ok = await publisher.tick({ force: true });
@@ -40,8 +42,6 @@ if (values.once) {
     process.exit(1);
   }
 }
-
-await publisher.loadExisting();
 
 let server = null;
 if (config.http) {

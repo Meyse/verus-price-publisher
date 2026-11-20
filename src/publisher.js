@@ -14,6 +14,13 @@ const NOT_LIVE = 2 | 4; // currency state flags: PRELAUNCH | REFUNDING
 
 export { writeFileAtomic };
 
+// A PBaaS chain's data may set the price of a PBaaS chain coin only for its own coin,
+// and only through its bridge basket. Another chain cannot set it (bad or hostile data).
+export function pbaasMaySet(id, price, systemId, bridges) {
+  if (!bridges.has(id)) return true;
+  return id === systemId && price.route?.type === 'reserve' && price.route.basket === bridges.get(id);
+}
+
 export class Publisher {
   /**
    * @param {ReturnType<import('./config.js').loadConfig>} config
@@ -47,7 +54,15 @@ export class Publisher {
   // Serve the file of an earlier run (same schema and chain) and do not
   // republish its block: a restart must not make an old block look new.
   async loadExisting() {
-    if (this.history) await this.history.load(Math.floor(this.now() / 1000));
+    if (this.history) {
+      try {
+        await this.history.load(Math.floor(this.now() / 1000));
+      } catch (error) {
+        // Never overwrite a file that could not be read: history stays off for this run.
+        this.log('error', `history: cannot read the files, history is off until a restart: ${error.message}`);
+        this.history = null;
+      }
+    }
     try {
       const body = await readFile(this.path);
       const doc = JSON.parse(body.toString('utf8'));
@@ -69,7 +84,9 @@ export class Publisher {
       await this.verifyChain(this.config.chain);
       const hash = await rpc.call('getbestblockhash');
       if (!force && hash === this.lastHash) return false;
-      if (!force && this.now() - this.lastCycleAt < this.config.minIntervalMs) return false;
+      const elapsed = this.now() - this.lastCycleAt;
+      // A negative value means the clock went back: do not wait for it to catch up.
+      if (!force && elapsed >= 0 && elapsed < this.config.minIntervalMs) return false;
       const started = this.now();
       const clients = [rpc, ...this.config.pbaas.map((c) => c.rpc)];
       clients.forEach((client) => client.resetCounts());
@@ -164,6 +181,7 @@ export class Publisher {
     }
     for (const entry of pbaas) {
       if (!map.has(entry.id)) add(await chain.rpc.call('getcurrency', [entry.id]));
+      if (!map.has(entry.id)) map.set(entry.id, null); // no bridge basket: the coin gets no price
     }
     this.bridgeList = { map, at: this.now() };
     return map;
@@ -221,7 +239,8 @@ export class Publisher {
           bridges,
         });
         for (const [id, price] of result.prices) {
-          if (!prices.has(id)) prices.set(id, { ...price, route: { ...price.route, system: pbaas.id } });
+          if (prices.has(id) || !pbaasMaySet(id, price, pbaas.id, bridges)) continue;
+          prices.set(id, { ...price, route: { ...price.route, system: pbaas.id } });
         }
         systems.push({
           name: pbaas.name, id: pbaas.id, height: read.header.height, blockTime: read.header.time,

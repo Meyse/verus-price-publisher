@@ -2,12 +2,15 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
-import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '../src/config.js';
-import { Publisher } from '../src/publisher.js';
+import { Publisher, writeFileAtomic } from '../src/publisher.js';
+import { History, slotStart } from '../src/history.js';
 import { RpcClient } from '../src/rpc.js';
 import { createPriceServer } from '../src/server.js';
 
@@ -30,7 +33,7 @@ async function fakeDaemon() {
     const results = {
       getblockchaininfo: () => ({ name: 'VRSC', chainid: VRSC }),
       getbestblockhash: () => daemon.hash,
-      getblockheader: () => ({ hash: params[0], height: daemon.height, time: 1790000000 + daemon.height }),
+      getblockheader: () => ({ hash: params[0], height: daemon.height, time: daemon.time ?? 1790000000 + daemon.height }),
       listcurrencies: () => fixture.baskets.map((b) => ({ currencydefinition: b, bestcurrencystate: b.bestcurrencystate })),
       getcurrency: () => byId(params[0]),
     };
@@ -180,4 +183,58 @@ test('a failed cycle adds no history sample; the next good cycle in a new slot d
   const hour = JSON.parse(await readFile(hourFile, 'utf8'));
   assert.deepEqual(hour.time, [1789999200, 1790002800]);
   assert.deepEqual(hour.height, [100, 2900]);
+});
+
+test('review fixes: --once continues the history; an unreadable history file does not stop prices', async (t) => {
+  const daemon = await fakeDaemon();
+  t.after(() => daemon.server.close());
+  const now = Math.floor(Date.now() / 1000);
+  daemon.time = now; // --once runs in a child process with the real clock
+  const dir = await mkdtemp(join(tmpdir(), 'vpp-'));
+  const configPath = join(dir, 'config.json');
+  await writeFile(configPath, JSON.stringify({ chain: 'VRSC', rpc: { url: `http://127.0.0.1:${daemon.port}` }, outDir: dir }));
+  const config = loadConfig({ configPath, env: {} });
+  const earlier = slotStart('hour', now) - 7200;
+  await new History({
+    outDir: dir, chain: { name: 'VRSC', id: VRSC, testnet: false },
+    anchor: { currency: config.chain.anchor, basket: config.chain.anchorBasket }, retentionDays: config.history.retentionDays,
+  }).record({ height: 1, blockTime: earlier, prices: { [VRSC]: { name: 'VRSC', usd: '0.5' } } }, earlier);
+
+  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('VERUS_')));
+  await promisify(execFile)(process.execPath, ['src/main.js', '--config', configPath, '--once'], { env });
+  const hour = JSON.parse(await readFile(join(dir, 'v1', 'history', 'hour.json'), 'utf8'));
+  assert.deepEqual(hour.time, [earlier, slotStart('hour', now)]); // continued, not replaced
+  assert.deepEqual(hour.usd[VRSC], [0.5, 0.636937]);
+
+  // day.json is a folder: it cannot be read. Prices still publish; history is off for this run.
+  const other = await mkdtemp(join(tmpdir(), 'vpp-'));
+  await mkdir(join(other, 'v1', 'history', 'day.json'), { recursive: true });
+  const logs = [];
+  const publisher = new Publisher({ ...config, outDir: other }, {
+    now: () => now * 1000, log: (level, message) => logs.push(`${level} ${message}`),
+  });
+  await publisher.loadExisting();
+  assert.equal(await publisher.tick(), true);
+  assert.equal(publisher.history, null);
+  assert.deepEqual(await readdir(join(other, 'v1', 'history')), ['day.json']); // nothing written
+  assert.equal(logs.filter((l) => l.startsWith('error history')).length, 1);
+});
+
+test('review fixes: a clock that goes back does not stop publishing; null is not a number', async (t) => {
+  const daemon = await fakeDaemon();
+  t.after(() => daemon.server.close());
+  const dir = await mkdtemp(join(tmpdir(), 'vpp-'));
+  const config = loadConfig({ chain: 'VRSC', env: { VERUS_RPC_URL: `http://127.0.0.1:${daemon.port}`, OUT_DIR: dir } });
+  let clock = 1795190400000;
+  const publisher = new Publisher(config, { now: () => clock });
+  assert.equal(await publisher.tick(), true);
+  clock -= 86400000; // the clock is set back one day
+  daemon.hash = 'bb';
+  assert.equal(await publisher.tick(), true); // minIntervalSeconds (60) does not wait a day
+
+  await writeFile(join(dir, 'c.json'), JSON.stringify({ chain: 'VRSC', rpc: { url: 'http://127.0.0.1:1' }, minRouteReserve: null }));
+  assert.throws(() => loadConfig({ configPath: join(dir, 'c.json'), env: {} }), /minRouteReserve/);
+
+  await assert.rejects(writeFileAtomic(join(dir, 'x.json'), 12345)); // not a Buffer or string
+  assert.ok(!(await readdir(dir)).some((name) => name.endsWith('.tmp'))); // no temporary file left
 });

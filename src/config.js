@@ -45,7 +45,7 @@ const DEFAULTS = {
 };
 
 function number(value, name, min) {
-  const n = Number(value);
+  const n = typeof value === 'number' || (typeof value === 'string' && value.trim()) ? Number(value) : Number.NaN;
   if (!Number.isFinite(n) || n < min) throw new Error(`Config "${name}" must be a number >= ${min}`);
   return n;
 }

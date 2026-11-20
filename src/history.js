@@ -38,10 +38,14 @@ function emptyFile(resolution, meta) {
     time: [],
     height: [],
     blockTime: [],
-    names: {},
-    usd: {},
+    names: dict(),
+    usd: dict(),
   };
 }
+
+const isMap = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+// Maps keyed by currency id have no prototype, so an id such as "__proto__" stays a plain key.
+const dict = (entries = []) => Object.assign(Object.create(null), Object.fromEntries(entries));
 
 // A loaded file is used only if it has the same schema, resolution, chain and anchor,
 // and consistent arrays.
@@ -52,9 +56,13 @@ function usable(doc, resolution, meta) {
   const n = doc.time?.length;
   if (!Array.isArray(doc.time) || !Array.isArray(doc.height) || !Array.isArray(doc.blockTime)
     || doc.height.length !== n || doc.blockTime.length !== n) return false;
-  if (!doc.time.every((t, i) => Number.isInteger(t) && (i === 0 || t > doc.time[i - 1]))) return false;
-  if (!doc.usd || typeof doc.usd !== 'object' || !doc.names || typeof doc.names !== 'object') return false;
-  return Object.values(doc.usd).every((series) => Array.isArray(series) && series.length === n);
+  if (!doc.time.every((t, i) => Number.isInteger(t) && slotStart(resolution, t) === t
+    && (i === 0 || t > doc.time[i - 1]))) return false;
+  if (!doc.height.every(Number.isInteger) || !doc.blockTime.every(Number.isInteger)) return false;
+  if (!isMap(doc.usd) || !isMap(doc.names)) return false;
+  if (!Object.values(doc.names).every((name) => typeof name === 'string')) return false;
+  return Object.values(doc.usd).every((series) => Array.isArray(series) && series.length === n
+    && series.every((v) => v === null || (typeof v === 'number' && Number.isFinite(v) && v > 0)));
 }
 
 export class History {
@@ -121,7 +129,7 @@ export class History {
    * @returns {Promise<string[]>} the resolutions that got a sample
    */
   async record(doc, nowSeconds) {
-    if (Math.abs(nowSeconds - doc.blockTime) > MAX_CLOCK_SKEW) return [];
+    if (!(Math.abs(nowSeconds - doc.blockTime) <= MAX_CLOCK_SKEW)) return []; // also NaN
     const recorded = [];
     for (const resolution of RESOLUTIONS) {
       const current = this.files[resolution]?.doc ?? emptyFile(resolution, this.meta);
@@ -140,15 +148,14 @@ export class History {
   // Return a new file document with the sample appended and old samples trimmed.
   append(current, slot, doc, resolution) {
     const n = current.time.length;
-    const usd = {};
-    const names = {};
-    for (const [id, series] of Object.entries(current.usd)) usd[id] = [...series, null];
+    const usd = dict(Object.entries(current.usd).map(([id, series]) => [id, [...series, null]]));
+    const names = dict();
     for (const [id, price] of Object.entries(doc.prices)) {
-      const value = compact(price.usd);
+      const value = compact(price?.usd);
       if (value === null) continue;
-      if (!usd[id]) usd[id] = new Array(n + 1).fill(null);
+      if (!Object.hasOwn(usd, id)) usd[id] = new Array(n + 1).fill(null);
       usd[id][n] = value;
-      names[id] = price.name;
+      names[id] = typeof price.name === 'string' ? price.name : id;
     }
     let time = [...current.time, slot];
     let height = [...current.height, doc.height];
@@ -166,7 +173,7 @@ export class History {
     }
     for (const id of Object.keys(usd)) {
       if (usd[id].every((v) => v === null)) delete usd[id];
-      else names[id] ??= current.names[id] ?? id;
+      else if (!Object.hasOwn(names, id)) names[id] = Object.hasOwn(current.names, id) ? current.names[id] : id;
     }
     return { ...emptyFile(resolution, this.meta), time, height, blockTime, names, usd };
   }

@@ -68,7 +68,10 @@ The anchor basket is always read, also when it is not in the list. See
    slot that already has a sample does not get a second one. Each write is atomic. A
    file for another chain, another anchor or another schema, or a damaged file, is renamed
    to `<file>.replaced-<unix time>` (never deleted), a new file starts, and the service
-   logs this once. A failed cycle records nothing. A cycle whose block time is more than
+   logs this once. If a file cannot be read at all (for example no permission), the
+   service logs an error, keeps publishing `prices.json`, and records no history until a
+   restart, so it never overwrites that file. `--once` also continues the history files.
+   A failed cycle records nothing. A cycle whose block time is more than
    2 hours from the clock records nothing (the daemon is still syncing, or the clock is
    wrong). If the clock goes back, no sample is added until it passes the last slot.
 
@@ -449,11 +452,12 @@ come from JSON numbers, so they keep about 15 to 16 significant digits (the daem
    it holds the anchor, USD = `priceinreserve[anchor]`; else no price.
 4. Any other reserve currency C: of the baskets that hold C and the native, take the one
    with the largest native reserve; USD = `priceinreserve[native] / priceinreserve[C] × native USD`.
-   If none holds the native, use the basket with the largest anchor reserve the same way.
    The chosen basket must hold at least `minRouteReserve` native units (default 1,000).
-   For an anchor route the anchor reserve counts as `anchor reserve / native USD` native
-   units. If the largest basket is too thin, C gets no price. This rule does not apply to
-   rules 1 to 3. `0` turns it off.
+   If no basket holds C and the native, or the largest one is under the minimum, use the
+   basket that holds C and the anchor with the largest anchor reserve, the same way. For
+   this anchor route the anchor reserve counts as `anchor reserve / native USD` native
+   units, and the same minimum applies. If both routes fail, C gets no price. The minimum
+   does not apply to rules 1 to 3. `0` turns it off.
 5. Bad data gives no price and no error: zero, negative, missing or non-numeric
    `priceinreserve`, zero supply, pre-launch or refunding baskets.
 6. Only baskets whose `systemid` is the chain itself are used. A basket from another
@@ -461,7 +465,9 @@ come from JSON numbers, so they keep about 15 to 16 significant digits (the daem
    older than the state on its own chain.
 7. The coin of a PBaaS chain uses rule 4 with one basket only: its bridge basket
    (`gatewayconverterid`), read on the PBaaS chain. A larger basket on the main chain does
-   not count. Without a working `pbaas` entry the coin has no price.
+   not count. Without a working `pbaas` entry the coin has no price. A configured PBaaS
+   chain without a bridge basket gives its coin no price. Data from one PBaaS chain cannot
+   set the price of another chain's coin.
 
 ## Security notes
 
@@ -486,7 +492,19 @@ Tested on 2026-11-20:
 
 - Unit and integration tests: `node --test test/*.test.js` (price math against values
   calculated by hand from recorded basket states, bad data, the allow-list, the
-  publish/failure/recovery cycle against a fake daemon, the HTTP server).
+  publish/failure/recovery cycle against a fake daemon, the HTTP server; history: one
+  sample per slot, the hour, 00:00 and Monday 00:00 boundaries, retention, restart without
+  a duplicate, `null` for a currency that appears or disappears, a changed anchor, a
+  failed cycle, bad saved files).
+- Price history on a live VRSCTEST daemon with a shifted clock: a test runner (not part of
+  the service) shifted the clock and the block-header time by the same offset, so that a
+  slot boundary came 90 s after the start. Heights, hashes and basket states were live.
+  Three runs: across a full hour (hour sample), across 00:00 UTC (hour and day samples)
+  and across Monday 00:00 UTC (hour, day and week samples). Each sample had the height,
+  block time and all prices of the `prices.json` of the same block (prices to 6
+  significant digits). A restart in the same hour added no sample and lost none. The
+  built-in server served the history paths with their `Cache-Control` values and 404 for
+  a `.replaced-*` path.
 - VRSCTEST daemon, several new blocks: the file changed on each new block. The native,
   anchor and anchor-basket prices were checked by hand against the raw basket state.
 - VRSC mainnet daemon, `"auto"` and a fixed basket list, several new blocks: six prices
@@ -512,7 +530,8 @@ Tested on 2026-11-20:
   published, with one warning.
 - Not verified: a PBaaS chain on its own local daemon (`rpc.conf`), `"auto"` on a PBaaS
   chain, vDEX (its public API did not answer during the test), the systemd unit, the Linux
-  `--network host` Docker command.
+  `--network host` Docker command, the nginx and Caddy snippets, a history run over days
+  with the real clock.
 
 Known limits:
 
