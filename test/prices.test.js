@@ -14,11 +14,11 @@ const usdByName = (prices) => Object.fromEntries(
   [...prices.values()].map((p) => [p.name, Number(format(p.usd))]),
 );
 
-test('mainnet baskets match the worked example of 2026-11-01 (within 0.5 %)', () => {
+test('recorded mainnet basket states give the hand-calculated prices (within 0.5 %)', () => {
   const { prices } = computePrices({
     baskets: localBaskets, native: VRSC, anchor: DAI, anchorBasket: BRIDGE_VETH,
   });
-  // Worked example computed by hand on 2026-11-01 from mainnet basket states.
+  // Expected values were calculated by hand from mainnet basket states.
   const expected = {
     VRSC: 0.6369,
     'DAI.vETH': 1,

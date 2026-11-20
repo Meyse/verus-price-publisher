@@ -361,55 +361,46 @@ come from JSON numbers, so they keep about 15 to 16 significant digits (the daem
 
 ## Verification status
 
-- Unit and integration tests: `node --test test/*.test.js` (price math against the
-  2026-11-01 worked example, bad data, the allow-list, the publish/failure/recovery cycle
-  against a fake daemon, the HTTP server).
-- Live: VRSCTEST daemon on 2026-11-20, several new blocks. VRSCTEST, DAI.vETH and
-  Bridge.vETH prices checked by hand against the raw Bridge.vETH basket state.
-- Mainnet, public API: one single run against `https://api.verus.services` with the fixed
-  basket list, no `listcurrencies`. All 12 VRSC-chain prices matched the 2026-11-01 worked
-  example within 0.1 %.
-- Mainnet, local daemon, 2026-11-20: `"auto"` for 4 cycles (heights 4330959 to 4330965;
-  27 live local baskets, 50 prices). VRSC, Bridge.vETH, vETH, CHIPS, vUSDC.vETH and SUPER🛒
-  checked by hand against raw `getcurrency` output: equal to 12 significant digits. A run
-  with the fixed list of 4 gave the same 12 prices as the public API run.
-- In "auto" mode some reserve prices come from a different basket than with the fixed list,
-  because a basket with a larger VRSC reserve holds them: vETH (NATI🦉, −0.08 %),
-  vUSDC.vETH (Floralis, −0.41 %), vUSDT.vETH (Floralis, +0.05 %), EURC.vETH (Floralis, −0.03 %).
-- `minRouteReserve` 1,000 on mainnet (block 4330974 and one new block, before the PBaaS
-  coin rule): 41 prices instead of 50, no other price changed. The 9 without a price:
-  Bears, Bulls (Traders, 336 VRSC),
-  bitcoins (🟠, 100 VRSC), Bridge.CHIPS, Bridge.vARRR, Bridge.vDEX (Ⓐ, 307 VRSC),
-  pepecoin.vETH (Kek🐸, 535 VRSC), vLINK.vETH, vwBTC.vETH (motb, 715 VRSC). On VRSCTEST:
-  111 prices instead of 137.
-- Docker (Docker Desktop 29.9.3 on macOS, 2026-11-20): the image builds (node:22-alpine,
-  234 MB, only `src/`, `package.json` and `LICENSE`, runs as uid 1000). A container against a
-  VRSCTEST daemon through `host.docker.internal` with an env file published a new block
-  (1326866, 111 prices) to `/data/v1/prices.json` and served it (200, CORS,
-  `Cache-Control`; POST got 405). On Docker Desktop, `--network host` could not reach the host,
-  and the conf-file credentials were refused for `host.docker.internal` as designed. The
-  Linux `--network host` command above is not verified.
-- PBaaS (2026-11-20): main chain on a local VRSC daemon, vARRR and CHIPS through their
-  public APIs, bridge found from chain data. vARRR 0.228125316016 and CHIPS 0.0336244924872
-  from their bridges, Bridge.vARRR 3.02946362688 and Bridge.CHIPS 0.172678554268, all equal
-  to a hand calculation from the raw states (the 2026-11-01 table has 0.2281, 0.0336, 3.029
-  and 0.173). 42 prices. Each public API got 4 calls in the first cycle (3 per block after
-  that). The vDEX API answered HTTP 502 from its CDN, so vDEX and Bridge.vDEX had no price
-  and the rest published. With the main chain only: 38 prices, and vARRR, CHIPS, vDEX and
-  the three bridges have no price. A test with one PBaaS chain on a dead address: the main
-  chain and the other chains published, one warning. VRSCTEST: 110 prices; only CHIPS777
-  (a testnet PBaaS chain without a `pbaas` entry) lost its price.
+Tested on 2026-11-20:
+
+- Unit and integration tests: `node --test test/*.test.js` (price math against values
+  calculated by hand from recorded basket states, bad data, the allow-list, the
+  publish/failure/recovery cycle against a fake daemon, the HTTP server).
+- VRSCTEST daemon, several new blocks: the file changed on each new block. The native,
+  anchor and anchor-basket prices were checked by hand against the raw basket state.
+- VRSC mainnet daemon, `"auto"` and a fixed basket list, several new blocks: six prices
+  were checked by hand against raw `getcurrency` output and were equal to 12 significant
+  digits. The call counts are in [Node load](#node-load-measured).
+- VRSC mainnet through a public API (`rpc.url`, fixed basket list, no `listcurrencies`,
+  one run): the same prices as the local daemon with the same list.
+- In `"auto"` mode a reserve price can come from a different basket than with a fixed
+  list, because the basket with the largest native reserve sets it. The differences seen
+  were under 0.5 %.
+- `minRouteReserve`: with the default, baskets under the minimum set no reserve price, and
+  no other price changed.
+- Docker (Docker Desktop 29.9.3 on macOS): the image builds (node:22-alpine, 234 MB, only
+  `src/`, `package.json` and `LICENSE`, runs as uid 1000). A container against a VRSCTEST
+  daemon through `host.docker.internal` with an env file published a new block to
+  `/data/v1/prices.json` and served it (200, CORS, `Cache-Control`; POST got 405). On Docker
+  Desktop, `--network host` could not reach the host, and the conf-file credentials were
+  refused for `host.docker.internal` as designed.
+- PBaaS: main chain on a local VRSC daemon, vARRR and CHIPS through their public APIs,
+  bridge found from chain data. The coin and bridge prices were equal to a hand calculation
+  from the raw states. Each public API got 4 calls in the first cycle and 3 per block after
+  that. With one PBaaS chain on a dead address, the main chain and the other chains
+  published, with one warning.
 - Not verified: a PBaaS chain on its own local daemon (`rpc.conf`), `"auto"` on a PBaaS
-  chain, vDEX, systemd unit.
-- Known limit: the header is read before the baskets. If a new block arrives during the
-  reads (under a second), some states can be one block newer than `height`. This was seen
-  once on mainnet (2 of 27 states one block newer).
-- Thin baskets: without the minimum, Ⓐ (307 VRSC in reserve) priced Bridge.vARRR at 2.83
-  (3.03 on its own chain) and Bridge.vDEX at 3.47 (3.27), and motb (715 VRSC) priced
-  vwBTC.vETH at 52,388 (tBTC.vETH: 65,556). With the default of 1,000 VRSC these get no
-  price. Bridge.vARRR, Bridge.CHIPS and Bridge.vDEX then need a `pbaas` entry for their
-  chain (best with an own daemon, see [PBaaS chains](#pbaas-chains)) for a price. A
-  basket's own price (rule 3) has no minimum, so a thin basket keeps a price for its own unit.
+  chain, vDEX (its public API did not answer during the test), the systemd unit, the Linux
+  `--network host` Docker command.
+
+Known limits:
+
+- The header is read before the baskets. If a new block arrives during the reads (under a
+  second), some states can be one block newer than `height`.
+- Thin baskets: a basket with a small reserve can price its reserve currencies far from
+  their price in deeper baskets, and such a basket is cheap to create. With the default of
+  1,000 native coins it sets no price for its reserves. A basket's own price (rule 3) has
+  no minimum, so a thin basket keeps a price for its own unit.
 
 ## Open questions for the Verus developers
 
