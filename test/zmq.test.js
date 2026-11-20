@@ -98,6 +98,11 @@ test('ZMQ: handshake and subscription bytes; a hashblock message, also split acr
   c.socket.write(bytes(0x00, 9, 'hashblock'));
   await until(() => s.messages === 3, 'the one-frame message');
   assert.equal(c.closed, false);
+  // PING (ZMTP 3.1 heartbeat): %d4 "PING", 2-octet TTL, context "ab" -> PONG with "ab".
+  const before = c.data.length;
+  c.socket.write(bytes(0x04, 9, 4, 'PING', 0, 10, 'ab'));
+  await until(() => c.data.length >= before + 9, 'the PONG');
+  assert.deepEqual(c.data.subarray(before), bytes(0x04, 7, 4, 'PONG', 'ab'));
 
   s.sub.stop(); // clean shutdown: the socket closes, no reconnect, no disconnect log
   await until(() => c.closed, 'the close on stop');
@@ -110,6 +115,10 @@ test('ZMQ: an oversize or malformed frame drops the connection; a refused connec
     'frame of 1048576 octets': bytes(0x02, 0, 0, 0, 0, 0, 0x10, 0, 0), // long frame header, 1 MiB
     'reserved frame flag bits': bytes(0x08, 0),
     'command frame with MORE': bytes(0x05, 0),
+    // 16 frames, the last one with MORE: a 17th frame would follow.
+    'message with too many frames': Buffer.concat(Array.from({ length: 16 }, () => bytes(0x01, 1, 'x'))),
+    // ERROR command, reason "bad\nline": the log line keeps no control character.
+    'peer sent ERROR: bad?line': bytes(0x04, 15, 5, 'ERROR', 8, 'bad\nline'),
   };
   for (const [reason, frame] of Object.entries(cases)) {
     const s = subscriber(peer.address);
@@ -126,7 +135,7 @@ test('ZMQ: an oversize or malformed frame drops the connection; a refused connec
   // A message before READY: dropped during the handshake.
   const early = subscriber(peer.address);
   early.sub.start();
-  await until(() => peer.connections.length === 4, 'a connection');
+  await until(() => peer.connections.length === 6, 'a connection');
   peer.last().socket.write(Buffer.concat([PUB_GREETING, bytes(0x00, 0)]));
   await until(() => peer.last().closed, 'drop on a message before READY');
   assert.deepEqual(early.events, []);

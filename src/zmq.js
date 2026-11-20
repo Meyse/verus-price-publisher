@@ -49,6 +49,9 @@ function subscribe(topic) {
   return shortFrame(0, Buffer.concat([Buffer.from([1]), topic]));
 }
 
+// Peer text for a log line: printable ASCII only, at most 100 characters.
+const printable = (octets) => octets.toString('latin1').replace(/[^\x20-\x7e]/g, '?').slice(0, 100);
+
 // Parse READY metadata into a map of lower-case names to values. Throws on bad input.
 function metadata(data) {
   const props = new Map();
@@ -224,7 +227,9 @@ export class ZmqSubscriber {
     }
     if (this.state !== 'ready') throw new Error('message before READY');
     this.frames.push(body);
-    if (this.frames.length > MAX_FRAMES) throw new Error('message with too many frames');
+    if (this.frames.length > MAX_FRAMES || (this.frames.length === MAX_FRAMES && (flags & FLAG_MORE))) {
+      throw new Error('message with too many frames');
+    }
     if (!(flags & FLAG_MORE)) {
       const [first] = this.frames;
       this.frames = [];
@@ -238,10 +243,16 @@ export class ZmqSubscriber {
     if (!nameLength || 1 + nameLength > body.length) throw new Error('bad command');
     const name = body.toString('latin1', 1, 1 + nameLength);
     const data = body.subarray(1 + nameLength);
-    if (name === 'ERROR') throw new Error(`peer sent ERROR: ${data.toString('latin1', 1, 1 + (data[0] ?? 0))}`);
+    if (name === 'ERROR') throw new Error(`peer sent ERROR: ${printable(data.subarray(1, 1 + (data[0] ?? 0)))}`);
+    if (name === 'PING' && this.state === 'ready') {
+      // Heartbeat (ZMTP 3.1, sent by libzmq publishers with heartbeats on): answer PONG with
+      // the ping's context (the octets after the 2-octet TTL).
+      this.socket.write(shortFrame(FLAG_COMMAND, Buffer.concat([Buffer.from([4]), Buffer.from('PONG', 'latin1'), data.subarray(2, 18)])));
+      return;
+    }
     if (name !== 'READY') {
-      if (this.state !== 'ready') throw new Error(`unexpected ${name} command`);
-      return; // other commands after the handshake (for example PING) are ignored
+      if (this.state !== 'ready') throw new Error(`unexpected ${printable(Buffer.from(name, 'latin1'))} command`);
+      return; // other commands after the handshake are ignored
     }
     if (this.state !== 'handshake') throw new Error('second READY');
     const type = metadata(data).get('socket-type')?.toString('latin1');
