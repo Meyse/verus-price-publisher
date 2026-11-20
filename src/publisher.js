@@ -99,6 +99,9 @@ export class Publisher {
       const hash = await rpc.call('getbestblockhash');
       if (!force && hash === this.lastHash) return false;
       const started = this.now();
+      // The attempt counts for the minimum interval, also when it fails: a failing cycle
+      // (for example a basket read) is not retried faster than a good one.
+      this.lastCycleAt = started;
       const clients = [rpc, ...this.config.pbaas.map((c) => c.rpc)];
       clients.forEach((client) => client.resetCounts());
       const doc = await this.cycle(hash);
@@ -106,7 +109,6 @@ export class Publisher {
       await writeFileAtomic(this.path, body);
       this.body = body;
       this.lastHash = hash;
-      this.lastCycleAt = started;
       await this.recordHistory(doc);
       // Calls of this cycle per RPC server (the poll that found the block is not included).
       const calls = Object.fromEntries(clients.map((client) => [client.label, client.resetCounts()]));

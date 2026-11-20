@@ -99,6 +99,28 @@ test('block notification on, but no notification: the safety poll still finds th
   assert.deepEqual(s.published, [['published height 100', 0], ['published height 101', 300000]]);
 });
 
+test('a failed cycle also waits for the minimum interval', async (t) => {
+  const s = await setup(t, { BLOCK_NOTIFY_FILE: '/tmp/block' });
+  s.loop.start();
+  await s.fire(); // T: good cycle
+  s.clock = T + 60000;
+  s.newBlock('bb', 101);
+  s.daemon.failCurrency = 'iHax5qYQGbcMGqJKKrPorpzUBX2oFFXGnY'; // Pure: one basket read fails
+  s.loop.notify();
+  await s.fire(); // 60 s: the cycle fails
+  assert.equal(s.published.length, 1);
+
+  s.clock = T + 61000;
+  s.daemon.failCurrency = null;
+  const before = s.calls();
+  s.loop.notify(); // touches right after a failed cycle: no retry before 120 s
+  s.loop.notify();
+  assert.deepEqual(s.planned(), [120000]);
+  assert.equal(s.calls(), before);
+  await s.fire();
+  assert.deepEqual(s.published[1], ['published height 101', 120000]);
+});
+
 test('a built-in PBaaS name gives its id and public API address', async () => {
   const env = { VERUS_RPC_URL: 'http://127.0.0.1:1' };
   const config = loadConfig({ chain: 'VRSC', env: { ...env, VERUS_PBAAS: 'vARRR, chips' } });
@@ -117,4 +139,13 @@ test('a built-in PBaaS name gives its id and public API address', async () => {
   assert.throws(await file([{ name: 'vDEX', baskets: 'auto' }]), /not allowed on a public API/);
   const own = (await file([{ name: 'vDEX', rpc: { url: 'http://127.0.0.1:2' }, baskets: 'auto' }]))().pbaas[0];
   assert.deepEqual([own.id, own.rpc.label, own.baskets], ['iHog9UCTrn95qpUBFCZ7kKz7qWdMA8MQ6N', 'http://127.0.0.1:2', 'auto']);
+  assert.throws(await file([{ name: 'vDEX', rpc: { url: 'https://api.vdex.to/' }, baskets: 'auto' }]), /not allowed on a public API/);
+  assert.throws(() => loadConfig({ chain: 'VRSC', env: { ...env, VERUS_PBAAS: 'chips, CHIPS' } }), /listed twice/);
+
+  await writeFile(join(dir, 't.json'), JSON.stringify({ chain: 'VRSCTEST', rpc: { url: 'http://127.0.0.1:1' }, pbaas: [{ name: 'vDEX', id: null, rpc: null }] }));
+  assert.throws(() => loadConfig({ configPath: join(dir, 't.json'), env: {} }), /for VRSC mainnet/);
+  for (const pollSeconds of [null, 1e308]) {
+    await writeFile(join(dir, 'p.json'), JSON.stringify({ chain: 'VRSC', rpc: { url: 'http://127.0.0.1:1' }, pollSeconds }));
+    assert.throws(() => loadConfig({ configPath: join(dir, 'p.json'), env: {} }), /pollSeconds/);
+  }
 });

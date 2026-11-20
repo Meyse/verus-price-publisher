@@ -113,14 +113,17 @@ function pbaasEntry(raw, i, mainId) {
     throw new Error(`Config pbaas[${i}] "${entry.name}" is not a built-in name `
       + `(${Object.keys(PUBLIC_PBAAS).join(', ')}): give name, id and rpc`);
   }
-  if (builtIn && (entry.id === undefined || entry.rpc === undefined) && mainId !== PRESETS.VRSC.id) {
+  if (builtIn && (entry.id == null || entry.rpc == null) && mainId !== PRESETS.VRSC.id) {
     throw new Error(`Config pbaas[${i}] "${key}": the built-in entries are for VRSC mainnet`);
   }
-  const publicApi = entry.rpc === undefined;
+  // 4: also an own rpc entry that points at a known public API.
+  const publicHosts = Object.values(PUBLIC_PBAAS).map((p) => new URL(p.url).hostname);
+  const publicApi = entry.rpc == null
+    || (typeof rpc.url === 'string' && URL.canParse(rpc.url) && publicHosts.includes(new URL(rpc.url).hostname));
   // Default: only the chain's bridge basket (found from chain data), never listcurrencies.
   const list = entry.baskets === undefined ? [] : baskets(entry.baskets, `pbaas[${i}].baskets`);
   if (publicApi && list === 'auto') {
-    throw new Error(`Config pbaas[${i}] "${key}": "auto" is not allowed on a public API (it calls listcurrencies)`);
+    throw new Error(`Config pbaas[${i}] "${key ?? entry.name}": "auto" is not allowed on a public API (it calls listcurrencies)`);
   }
   return {
     name: key ?? entry.name,
@@ -171,11 +174,17 @@ export function loadConfig({ configPath, chain, env = process.env } = {}) {
   const pbaasList = file.pbaas ?? (env.VERUS_PBAAS ? env.VERUS_PBAAS.split(',').map((s) => s.trim()).filter(Boolean) : []);
   if (!Array.isArray(pbaasList)) throw new Error('Config "pbaas" must be a list');
   const pbaas = pbaasList.map((entry, i) => pbaasEntry(entry, i, main.id));
+  const seen = new Set([main.id]);
+  for (const entry of pbaas) {
+    if (seen.has(entry.id)) throw new Error(`Config pbaas: chain ${entry.name} (${entry.id}) is listed twice`);
+    seen.add(entry.id);
+  }
   const notifyPath = env.BLOCK_NOTIFY_FILE ?? merged.blockNotifyFile ?? null;
   if (notifyPath !== null && (typeof notifyPath !== 'string' || !notifyPath)) {
     throw new Error('Config "blockNotifyFile" must be a file path');
   }
-  const pollSeconds = merged.pollSeconds ?? (notifyPath ? SAFETY_POLL_SECONDS : POLL_SECONDS);
+  const pollSeconds = merged.pollSeconds === undefined ? (notifyPath ? SAFETY_POLL_SECONDS : POLL_SECONDS) : merged.pollSeconds;
+  if (number(pollSeconds, 'pollSeconds', 1) > 86400) throw new Error('Config "pollSeconds" must be at most 86400');
   let http = null;
   if (merged.http || env.HTTP_PORT) {
     http = {
