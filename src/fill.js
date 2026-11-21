@@ -10,9 +10,13 @@
 // step is a fixed number of blocks: a quarter of the blocks of an hour, or half of those of
 // a day or a week (from the known block times).
 //
-// Load: one call at a time, a pause before each call after the first, responses of about
-// RESPONSE_BYTES, at most MAX_CALLS calls per run, and no call while a publish cycle runs.
-// A failed call, or the call limit, stops the run; the fill is then off until a restart.
+// Load: one call at a time, and no call starts while a publish cycle runs. Each call is
+// sized from the measured time per state of the last call, to about TARGET_MS, and to at
+// most about RESPONSE_BYTES; the first call of a run reads FIRST_STATES states. Before each
+// call after the first, a pause of max(PAUSE_MS, 2 x the last call's time): the fill keeps
+// the daemon at most about one third busy. After MAX_CALLS calls the run waits CAP_WAIT_MS
+// and goes on. A call over SLOW_MS halves the size; a one-state call over SLOW_MS, or a
+// failed call, ends the run, and the fill is then off until a restart.
 
 import { format } from './decimal.js';
 import { RESOLUTIONS, SLOT_SECONDS, slotStart } from './history.js';
@@ -29,6 +33,10 @@ const MAP_POINTS = 100;
 const FASTEST_BLOCK_SECONDS = 30;
 export const MAX_CALLS = 1500;
 export const PAUSE_MS = 1000;
+const CAP_WAIT_MS = 60 * 60 * 1000;
+const TARGET_MS = 1000;
+const SLOW_MS = 5000;
+const FIRST_STATES = 4;
 
 // Bytes of one state in a response, from the number of reserves (measured on VRSCTEST:
 // 615 to 3052 bytes for 1 to 8 reserves).
@@ -93,12 +101,12 @@ export class HistoryFill {
    * @param {() => Promise<void>} options.idle resolves when no publish cycle runs
    */
   constructor({
-    history, rpc, chain, minRouteReserve, windowDays, log, now, sleep, idle, pauseMs = PAUSE_MS, maxCalls = MAX_CALLS,
+    history, rpc, chain, minRouteReserve, windowDays, log, now, sleep, idle, maxCalls = MAX_CALLS,
   }) {
-    Object.assign(this, { history, rpc, chain, minRouteReserve, windowDays, log, now, sleep, idle, pauseMs, maxCalls });
+    Object.assign(this, { history, rpc, chain, minRouteReserve, windowDays, log, now, sleep, idle, maxCalls });
     this.tried = new Set(); // "resolution:slot" looked at in this process
     this.running = null;
-    this.off = false; // after a failed call or the call limit: off until a restart
+    this.off = false; // after a failed call: off until a restart
     this.stopped = false;
   }
 
@@ -142,14 +150,20 @@ export class HistoryFill {
 
   async run(missing, { defs, bridges, tip }) {
     const started = this.now();
-    const stats = { calls: 0, maxBytes: 0, filled: { hour: 0, day: 0, week: 0 } };
+    const stats = {
+      calls: 0, states: 0, daemonMs: 0, longestMs: 0, maxBytes: 0, filled: { hour: 0, day: 0, week: 0 },
+    };
     this.stats = stats;
+    this.batch = 0; // calls since the last cap wait
+    this.size = FIRST_STATES; // states for the next call (the cost per state is not known yet)
+    this.lastMs = 0;
     const count = (list) => RESOLUTIONS.map((r) => `${r} ${list.filter((m) => m.resolution === r).length}`).join(', ');
     this.log('info', `history fill: ${missing.length} slots missing (${count(missing)}); reading past basket states`);
     const summary = () => {
       const filled = RESOLUTIONS.map((r) => `${r} ${stats.filled[r]}`).join(', ');
-      return `filled ${filled}; ${stats.calls} calls in ${Math.round((this.now() - started) / 1000)} s, `
-        + `largest response ${Math.ceil(stats.maxBytes / 1024)} KB`;
+      return `filled ${filled}; ${stats.calls} calls, ${stats.states} states, daemon time `
+        + `${Math.round(stats.daemonMs / 1000)} s, in ${Math.round((this.now() - started) / 1000)} s; longest call `
+        + `${stats.longestMs} ms, largest response ${Math.ceil(stats.maxBytes / 1024)} KB`;
     };
     try {
       const anchorDef = defs.find((d) => d.currencyid === this.chain.anchorBasket);
@@ -185,28 +199,49 @@ export class HistoryFill {
     }
   }
 
-  // One getcurrencystate call: a pause before it (not before the first), and never while
-  // a publish cycle runs.
-  async call(id, range) {
+  // One getcurrencystate call of `states` states: a pause before it (not before the first),
+  // and never while a publish cycle runs. Then the size of the next call.
+  async call(id, range, states) {
     if (this.stopped) throw STOP;
-    if (this.stats.calls >= this.maxCalls) throw new Error(`reached the limit of ${this.maxCalls} calls per run`);
-    if (this.stats.calls > 0) await this.sleep(this.pauseMs);
+    if (this.batch >= this.maxCalls) {
+      this.log('info', `history fill: ${this.maxCalls} calls; waiting 60 min, then the fill goes on`);
+      await this.sleep(CAP_WAIT_MS);
+      this.batch = 0;
+    } else if (this.stats.calls > 0) {
+      await this.sleep(Math.max(PAUSE_MS, 2 * this.lastMs));
+    }
     await this.idle();
     if (this.stopped) throw STOP;
     this.stats.calls += 1;
+    this.batch += 1;
+    const started = this.now();
     const result = await this.rpc.call('getcurrencystate', [id, range]);
-    this.stats.maxBytes = Math.max(this.stats.maxBytes, JSON.stringify(result)?.length ?? 0);
+    const ms = Math.max(0, this.now() - started);
+    Object.assign(this.stats, {
+      states: this.stats.states + states,
+      daemonMs: this.stats.daemonMs + ms,
+      longestMs: Math.max(this.stats.longestMs, ms),
+      maxBytes: Math.max(this.stats.maxBytes, JSON.stringify(result)?.length ?? 0),
+    });
+    this.lastMs = ms;
+    if (ms > SLOW_MS) {
+      if (states <= 1) throw new Error(`one state took ${ms} ms`);
+      this.size = Math.max(1, Math.floor(states / 2));
+    } else {
+      this.size = ms > 0 ? Math.max(1, Math.floor((TARGET_MS * states) / ms)) : Infinity;
+    }
     return result;
   }
 
-  // States of one basket on the grid start, start + step, ..., end, in calls of about
-  // RESPONSE_BYTES. Returns height -> { time, state } for the heights in `keep` (all if null).
+  // States of one basket on the grid start, start + step, ..., end, in calls sized by
+  // call(). Returns height -> { time, state } for the heights in `keep` (all if null).
   async read(def, start, end, step, keep = null) {
-    const per = Math.max(1, Math.floor(RESPONSE_BYTES / entryBytes(def)));
+    const limit = Math.max(1, Math.floor(RESPONSE_BYTES / entryBytes(def)));
     const out = new Map();
-    for (let from = start; from <= end; from += per * step) {
+    for (let from = start, per; from <= end; from += per * step) {
+      per = Math.min(limit, this.size);
       const to = Math.min(end, from + (per - 1) * step);
-      const result = await this.call(def.currencyid, `${from},${to},${step}`);
+      const result = await this.call(def.currencyid, `${from},${to},${step}`, Math.floor((to - from) / step) + 1);
       const expected = Math.floor((to - from) / step) + 1;
       if (!Array.isArray(result) || result.length !== expected) {
         throw new Error(`getcurrencystate ${def.currencyid}: unexpected result`);

@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, readdir } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '../src/config.js';
-import { History } from '../src/history.js';
+import { History, slotStart } from '../src/history.js';
 import { Publisher } from '../src/publisher.js';
 import { fakeDaemon, VRSC } from './fake-daemon.js';
 
@@ -21,15 +21,20 @@ const doubled = (state) => ({
   reservecurrencies: state.reservecurrencies.map((r) => (r.currencyid === VRSC ? { ...r, priceinreserve: 36.93738122 } : r)),
 });
 
-async function service(t, daemon, env = {}) {
+// A service on a fake daemon with an injected clock (seconds). A pause moves the clock.
+async function service(t, daemon, env = {}, file = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'vpp-fill-'));
-  const s = { dir, logs: [], sleeps: [] };
-  s.config = loadConfig({ chain: 'VRSC', env: { VERUS_RPC_URL: `http://127.0.0.1:${daemon.port}`, OUT_DIR: dir, ...env } });
+  const s = { dir, logs: [], sleeps: [], clock: 0 };
+  await writeFile(join(dir, 'config.json'), JSON.stringify({ chain: 'VRSC', ...file }));
+  s.config = loadConfig({
+    configPath: join(dir, 'config.json'), env: { VERUS_RPC_URL: `http://127.0.0.1:${daemon.port}`, OUT_DIR: dir, ...env },
+  });
   s.start = async (clock, options = {}) => {
+    s.clock = clock;
     s.publisher = new Publisher(s.config, {
-      now: () => clock * 1000,
+      now: () => s.clock * 1000,
       log: (level, message) => s.logs.push(`${level} ${message}`),
-      sleep: async (ms) => { s.sleeps.push(ms); },
+      sleep: async (ms) => { s.sleeps.push(ms); s.clock += ms / 1000; },
       ...options,
     });
     await s.publisher.loadExisting();
@@ -68,12 +73,13 @@ test('history fill: first start and a gap after a restart are filled from past s
   assert.deepEqual((await off.file('hour')).time, [HOUR14]);
   assert.equal(fillCalls(daemon).length, 0);
 
-  // First start, empty history: one call maps time to height, then one call per basket.
+  // First start, empty history: the first call of a run is small (4 states); then one
+  // call maps time to height, and one call per basket (a fast daemon: the size limit).
   const s = await service(t, daemon);
   await (await s.start(HOUR14 + 600)).tick();
   await s.publisher.fill.running;
-  assert.equal(fillCalls(daemon).length, 1 + 4); // 4 local baskets in the fixture
-  assert.deepEqual(s.sleeps, [1000, 1000, 1000, 1000]); // a pause before each call after the first
+  assert.equal(fillCalls(daemon).length, 2 + 4); // 4 local baskets in the fixture
+  assert.deepEqual(s.sleeps, [1000, 1000, 1000, 1000, 1000]); // a pause before each call after the first
 
   // The service stops at 14:10 and starts again at 20:10.
   daemon.height = 430; // 20:09:30
@@ -81,7 +87,7 @@ test('history fill: first start and a gap after a restart are filled from past s
   const before = fillCalls(daemon).length;
   await (await s.start(HOUR14 + 6 * H + 600)).tick();
   await s.publisher.fill.running;
-  assert.equal(fillCalls(daemon).length - before, 4); // one call per basket, no mapping call
+  assert.equal(fillCalls(daemon).length - before, 1 + 4); // the small first call, then one per basket
   const hour = await s.file('hour');
   // 16:00 and 17:00 have no block: they stay missing. No value is invented.
   assert.deepEqual(hour.time, [11, 12, 13, 14, 15, 18, 19, 20].map((h) => HOUR14 + (h - 14) * H));
@@ -114,7 +120,7 @@ test('history fill: a failed call stops the run, files stay valid, publishing go
     const [start, , step] = range.split(',').map(Number);
     return step === 15 && start < 2000;
   };
-  const s = await service(t, daemon);
+  const s = await service(t, daemon, {}, { historyFillDays: { hour: 7 } });
   await (await s.start(HOUR14 + 600)).tick();
   await s.publisher.fill.running;
   assert.equal(s.logs.filter((l) => l.startsWith('error history fill stopped')).length, 1);
@@ -169,9 +175,11 @@ test('history fill: grid estimates that miss, and a chain that starts in the mid
   const slow = (83 * H) / 80;
   daemon.blockTime = (h) => (h <= 60 ? A - H + 60 * h : h <= 60 + slow ? A + 80 * (h - 60) : A + 83 * H + 40 * (h - 60 - slow));
   daemon.height = 60;
-  const s = await service(t, daemon, { HISTORY_FILL: '0' });
+  const s = await service(t, daemon, { HISTORY_FILL: '0' }, { historyFillDays: { hour: 7 } });
   await (await s.start(A + 30)).tick();
-  s.config = loadConfig({ chain: 'VRSC', env: { VERUS_RPC_URL: `http://127.0.0.1:${daemon.port}`, OUT_DIR: s.dir } });
+  s.config = loadConfig({
+    configPath: join(s.dir, 'config.json'), env: { VERUS_RPC_URL: `http://127.0.0.1:${daemon.port}`, OUT_DIR: s.dir },
+  });
   daemon.height = 60 + slow + 83 * 90;
   daemon.hash = 'bb';
   await (await s.start(HOUR14 + 630)).tick();
@@ -187,7 +195,7 @@ test('history fill: grid estimates that miss, and a chain that starts in the mid
   other.blockTime = (h) => G + 60 * h;
   const clock = MONDAY + 2 * 24 * H + 13 * H + 600;
   other.height = Math.floor((clock - 30 - G) / 60);
-  const m = await service(t, other);
+  const m = await service(t, other, {}, { historyFillDays: { hour: 7 } });
   await (await m.start(clock)).tick();
   await m.publisher.fill.running;
   const day = await m.file('day');
@@ -210,4 +218,55 @@ test('history: a live cycle with no new slot does not wait behind a fill write',
   assert.deepEqual(await Promise.race([history.record(sample(HOUR14 + 60), HOUR14 + 60), waited]), []);
   release();
   await write;
+});
+
+test('history fill: calls sized by the measured time per state, pauses by the last call, windows per file, the call cap waits', async (t) => {
+  const daemon = await fakeDaemon();
+  t.after(() => daemon.server.close());
+  const G = HOUR14 - 60 * 24 * H; // a chain of 60 days, a block every 60 s
+  daemon.blockTime = (h) => G + 60 * h;
+  daemon.height = 60 * 24 * 60 + 10; // 14:10
+  const s = await service(t, daemon);
+  // A slow daemon: 50 ms per state (the clock moves while it answers); call 8 takes 6 s.
+  const durations = [];
+  daemon.onRange = (states) => {
+    const ms = durations.length === 7 ? 6000 : states * 50;
+    durations.push(ms);
+    s.clock += ms / 1000;
+  };
+  await (await s.start(HOUR14 + 600, { fillOptions: { maxCalls: 30 } })).tick();
+  await s.publisher.fill.running;
+  const sizes = fillCalls(daemon).map((r) => { const [a, b, step] = r.params[1].split(',').map(Number); return (b - a) / step + 1; });
+  // First call 4 states (200 ms); then 1 s / 50 ms = 20 states per call (or fewer at the end of a range).
+  assert.equal(sizes[0], 4);
+  // Call 8 (20 states) took 6 s, over 5 s: the next call has half its size, then 20 again.
+  assert.deepEqual(sizes.slice(6, 10), [20, 20, 10, 20]);
+  assert.ok(sizes.slice(1).every((n) => n <= 20) && sizes.filter((n) => n === 20).length > 10, sizes.join(','));
+  // The pause before a call is max(1 s, 2 x the last call): 1 s after the 200 ms call, 2 s
+  // after each 1 s call, 12 s after the 6 s call.
+  assert.equal(s.sleeps[0], 1000);
+  assert.equal(s.sleeps[7], 12000);
+  assert.ok(s.sleeps.every((ms, i) => ms === 3600000 || ms === Math.max(1000, 2 * durations[i])), s.sleeps.join(','));
+  // After 30 calls the run waits 60 min (log once per wait) and then goes on by itself.
+  const waits = s.sleeps.filter((ms) => ms === 3600000).length;
+  assert.equal(waits, Math.floor((sizes.length - 1) / 30));
+  assert.ok(waits >= 1);
+  assert.equal(s.logs.filter((l) => l.includes('waiting 60 min')).length, waits);
+  assert.deepEqual(s.logs.filter((l) => l.startsWith('error')), []);
+
+  // The default windows: 2 days of hours, 45 days of days, 730 days of weeks (here: since the chain start).
+  const hour = await s.file('hour');
+  const day = await s.file('day');
+  const week = await s.file('week');
+  assert.deepEqual(hour.time, Array.from({ length: 48 }, (_, i) => HOUR14 - (47 - i) * H));
+  assert.deepEqual(day.time, Array.from({ length: 45 }, (_, i) => HOUR14 - 14 * H - (44 - i) * 24 * H));
+  const firstWeek = slotStart('week', G);
+  assert.deepEqual(week.time, Array.from({ length: (slotStart('week', HOUR14) - firstWeek) / (7 * 24 * H) + 1 },
+    (_, i) => firstWeek + i * 7 * 24 * H));
+  // A window larger than the retention is cut to the retention; 0 = no fill for that file.
+  const cut = await service(t, daemon, {}, { historyFillDays: { hour: 30, week: 0 }, historyRetentionDays: { day: 10 } });
+  assert.deepEqual(cut.config.history.fill.windowDays, { hour: 7, day: 10, week: 0 });
+  for (const bad of [{ historyFillDays: 0 }, { historyFillMaxDays: 0 }, { historyFillDays: { week: 1e308 } }]) {
+    await assert.rejects(service(t, daemon, {}, bad), /historyFill/);
+  }
 });

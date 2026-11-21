@@ -1,6 +1,6 @@
 // A fake verusd on the network boundary. It answers from the mainnet fixture.
 // Optional: blockTime(height), stateAt(id, height, state) for getcurrencystate, and
-// failRange(params) to fail a getcurrencystate call.
+// failRange(params) to fail a getcurrencystate call, onRange(states) on each answer.
 import { once } from 'node:events';
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
@@ -42,6 +42,7 @@ export async function fakeDaemon() {
         const heights = [];
         for (let h = start; h <= Math.min(end, daemon.height); h += Math.max(1, step)) heights.push(h);
         if (end <= daemon.height && heights[heights.length - 1] !== end) heights.push(end);
+        daemon.onRange?.(heights.length);
         return heights.map((height) => ({
           height,
           blocktime: blockTime(height),

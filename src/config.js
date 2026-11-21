@@ -52,7 +52,7 @@ const DEFAULTS = {
   history: true,
   historyRetentionDays: { hour: 7, day: 400, week: 0 },
   historyFill: true,
-  historyFillMaxDays: 730,
+  historyFillDays: { hour: 2, day: 45, week: 730 },
   http: null,
 };
 
@@ -149,11 +149,18 @@ function historyConfig(merged, env) {
   };
   const fill = env.HISTORY_FILL === undefined ? merged.historyFill : SWITCH[env.HISTORY_FILL.trim().toLowerCase()];
   if (typeof fill !== 'boolean') throw new Error('Config "historyFill" (HISTORY_FILL) must be true or false');
-  const maxDays = number(merged.historyFillMaxDays, 'historyFillMaxDays', 0);
-  // The fill window of a file: its retention, but at most historyFillMaxDays (also for
-  // a file without a limit).
-  const windowDays = Object.fromEntries(Object.entries(retentionDays)
-    .map(([resolution, d]) => [resolution, d > 0 ? Math.min(d, maxDays) : maxDays]));
+  // The fill window of a file (0 = no fill), cut to the file's retention.
+  if (merged.historyFillMaxDays !== undefined) throw new Error('Config "historyFillMaxDays" is replaced by "historyFillDays"');
+  const given = merged.historyFillDays;
+  if (given === null || typeof given !== 'object' || Array.isArray(given)) {
+    throw new Error('Config "historyFillDays" must be an object like { "hour": 2, "day": 45, "week": 730 }');
+  }
+  const fillDays = { ...DEFAULTS.historyFillDays, ...given };
+  const windowDays = Object.fromEntries(Object.entries(retentionDays).map(([resolution, keep]) => {
+    const d = number(fillDays[resolution], `historyFillDays.${resolution}`, 0);
+    if (d > 36500) throw new Error(`Config "historyFillDays.${resolution}" must be at most 36500`);
+    return [resolution, keep > 0 ? Math.min(d, keep) : d];
+  }));
   return { retentionDays, fill: fill ? { windowDays } : null };
 }
 

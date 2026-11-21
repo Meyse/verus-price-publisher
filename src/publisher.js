@@ -30,9 +30,11 @@ export class Publisher {
    * @param {() => number} [options.now] milliseconds
    * @param {(ms: number) => Promise<void>} [options.sleep] the pause between fill calls
    * @param {boolean} [options.fill] false: no history fill (--once)
+   * @param {object} [options.fillOptions] { maxCalls } for the history fill
    */
   constructor(config, {
     log = () => {}, now = Date.now, sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }), fill = true,
+    fillOptions = {},
   } = {}) {
     this.config = config;
     this.log = log;
@@ -66,6 +68,7 @@ export class Publisher {
       now,
       sleep,
       idle: () => this.idle(),
+      ...fillOptions,
     }) : null;
   }
 

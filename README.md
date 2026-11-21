@@ -14,8 +14,9 @@ of wallets.
   `getbestblockhash`, and no poll calls the daemon in the 60 s after a cycle. On VRSC
   mainnet that is about 1,780 calls per hour, or about 400 with a fixed list of 4
   baskets. Missing history slots (after a stop, or at the first start) are filled from
-  the chain's past states with few calls: on VRSCTEST, one call per basket for a day of
-  missing hours. On VRSC mainnet each block state costs the daemon more time. See
+  the chain's past basket states, one call at a time, with the daemon busy at most about
+  one third of the time. On VRSC mainnet a first start took 172 calls and 109 s of daemon
+  time over 400 s; a one-day gap took 46 calls and 26 s. See
   [Node load](#node-load-measured).
 - **How to install:** a git clone and a systemd unit, or a Docker image. See
   [Install](#install). Nothing to change in the daemon's config.
@@ -111,18 +112,39 @@ already computed. Their only cost is one small file write per slot (24 hourly, 1
 at most 1 weekly write per day).
 
 The [history fill](#history-fill) reads missing slots with `getcurrencystate`, one call
-at a time with a 1 s pause, never during a cycle. Measured on VRSCTEST (91 baskets):
+at a time. Each call is sized to take the daemon about 1 s, and before each call the fill
+waits at least twice as long as the last call took, so it keeps the daemon at most about
+one third busy. No fill call starts during a cycle. Measured with the default fill
+windows (2 days of hours, 45 days of days, 730 days of weeks), through a counting proxy:
 
-| Missing | Calls | Time | Data read | Largest response | Daemon time per call |
-|---|---|---|---|---|---|
-| Everything (first start, empty history): 670 slots | 977: 1 to map time to height, then 8 to 21 per basket | 18.4 min | 183 MB (about 1,560 block states per basket) | 292 KB | at most 1.0 s |
-| One day: 24 hourly slots and 1 daily slot | 95: 1 per basket, 2 for the 4 baskets with 8 reserves | 104 s | 11.5 MB | 292 KB | at most 0.8 s |
+Cost per state read (daemon time per block state, at the proxy). It depends on the
+basket: on VRSC, Bridge.vETH is the most costly.
 
-On VRSCTEST a call costs the daemon about 1 ms per block state (118 s of daemon time for
-the 142,216 states of the first start). On a VRSC mainnet
-daemon it costs about 50 to 70 ms per block state, at any spacing: 10 states took 0.6 to
-0.7 s, 40 states 2.0 s, and 152 states (one call of the hourly grid for Bridge.vETH)
-10.1 s.
+| Chain | Baskets | Per basket: min / median / max | Average in a first start |
+|---|---|---|---|
+| VRSC | 27 (`"auto"`) | 0.24 / 1.2 / 57 ms | 8.4 ms |
+| VRSCTEST | 91 (`"auto"`) | 0.14 / 0.34 / 7.1 ms | 0.75 ms |
+
+Fill runs. "First start" is an empty `outDir` (195 slots: 47 hours, 44 days, 104 weeks).
+"One-day gap" is a restart after the 24 hourly samples and the daily sample of
+2026-11-20 were deleted from the files (25 slots). "Daemon busy" is daemon time divided by
+wall time.
+
+| Run | Calls | States | Daemon time | Wall time | Daemon busy | Longest call | Largest response |
+|---|---|---|---|---|---|---|---|
+| VRSC first start, `"auto"` (27 baskets) | 172 | 12,967 | 109 s | 400 s | 27 % | 4.1 s | 290 KB |
+| VRSC first start, fixed list of 4 baskets | 60 | 2,037 | 58 s | 178 s | 33 % | 3.5 s | 283 KB |
+| VRSC one-day gap, `"auto"` | 46 | 2,625 | 26 s | 96 s | 27 % | 2.5 s | 290 KB |
+| VRSCTEST first start, `"auto"` (91 baskets) | 356 | 43,444 | 34 s | 394 s | 9 % | 0.9 s | 292 KB |
+| VRSCTEST one-day gap, `"auto"` | 96 | 8,923 | 8 s | 104 s | 8 % | 0.7 s | 292 KB |
+
+In every run, no call failed, no call took over 5 s, and every slot in the windows was
+filled. The response sizes are on the wire. The calls are sized from the time per state
+of the last call, and the baskets have different costs: a size from a cheap basket gives
+a longer call on a costly one (on VRSC, 11 of 172 calls took over 2 s). History file
+sizes after a first start (hour, day, week): VRSC `"auto"` 21, 20 and 39 KB (gzip 2.6,
+2.7 and 13.5 KB); VRSC with 4 baskets 7, 7 and 14 KB; VRSCTEST 64, 61 and 109 KB (gzip
+7.5, 7.5 and 25.5 KB).
 
 ### Basket list
 
@@ -315,7 +337,7 @@ the defaults.
 | `history` | `true` | Keep the price history files under `<outDir>/v1/history/`. `false` turns it off. |
 | `historyRetentionDays` | `{ "hour": 7, "day": 400, "week": 0 }` | How many days of samples each history file keeps. Older samples are removed. `0` = no limit. |
 | `historyFill` | `true` | Fill missing history slots from the chain's past states (see [History fill](#history-fill)). `false` turns it off. |
-| `historyFillMaxDays` | 730 | How far back the fill goes, in days, in any file. It sets the fill window of the weekly file (no retention limit); the hourly and daily files are filled over their retention. |
+| `historyFillDays` | `{ "hour": 2, "day": 45, "week": 730 }` | How many days back the fill goes in each history file. A value over the file's retention is cut to the retention. `0` = no fill for that file. |
 | `http` | `null` (off) | `{ "host": "127.0.0.1", "port": 8080 }` to serve the files from the service itself. |
 | `pbaas` | `[]` (off) | PBaaS chains. A built-in name (`"vARRR"`, `"CHIPS"`, `"vDEX"`) uses that chain's public API. An object `{ name, id, rpc }` uses another server, for example an own daemon; optional `baskets` (default: only the chain's bridge basket). See [PBaaS chains](#pbaas-chains). `rpc` takes `conf`, `url`, `timeoutSeconds` as for the main chain. |
 
@@ -576,19 +598,26 @@ one basket at every step-th block, with the block time.
 - **When:** after the first cycle that publishes a block after a start, and after any
   later cycle when slots are missing (for example after the daemon was down while the
   service ran). The fill runs in the background. Not with `--once`.
-- **Which slots:** every slot that has ended, in the last `historyRetentionDays` of each
-  file, at most `historyFillMaxDays` (default 730) back. So by default: 7 days of hours,
-  400 days of days, and 730 days of weeks. Only when the block of the cycle is less than
-  2 hours from the clock (the daemon is synced).
+- **Which slots:** every slot that has ended, inside the fill window of its file
+  (`historyFillDays`, default 2 days of hours, 45 days of days and 730 days of weeks; cut
+  to the file's retention). A chart of a day uses hourly points, a chart of a month daily
+  points, and longer charts weekly points; the windows cover that. The files still grow
+  to their full retention (7, 400 days, no limit) from live samples; only a gap inside a
+  window is filled. Only when the block of the cycle is less than 2 hours from the clock
+  (the daemon is synced).
 - **Which block:** the fill reads the states on a grid of heights with a fixed step: a
   quarter of the blocks of an hour (14 blocks at 62 s per block), or half of the blocks of
   a day (696) or a week (4,877). The sample of a slot is the first grid block (by height)
   whose block time is at or after the slot start and before the slot end. It is at most
   one grid step after the first block of the slot. A day or week slot inside a finer grid
-  uses that grid (a day in the last 7 days is filled from the hour grid). `height` and
-  `blockTime` are those of the grid block.Measured on VRSCTEST (670 filled slots): hourly
-  samples a median of 7 min and at most 31 min after the slot start, daily samples 7.2 h
-  and 12.3 h, weekly samples 7.1 h and 3.5 days.
+  uses that grid (a missing day whose first hour is also missing is filled from the hour
+  grid). `height` and `blockTime` are those of the grid block. Measured after a first
+  start: hour samples a median of 7 min (VRSCTEST) and 8 min (VRSC) after the slot start,
+  at most 30 min; day samples 10 to 12 h after the slot start; week samples a median of
+  15 h (VRSCTEST) and 81 h (VRSC) after the slot start, at most 84 h. The grid starts at a
+  height estimated from the known blocks around the missing slots. So a later fill of the
+  same slot can use a different grid block (seen on VRSC: one block earlier, with the same
+  prices).
 - **Same prices:** the prices come from the same code as live samples, with the states of
   all baskets at that one height: the same [price rules](#price-rules), `minRouteReserve`,
   and local baskets only. With `"auto"`, a basket that was not live at that height
@@ -597,17 +626,20 @@ one basket at every step-th block, with the block time.
 - **What stays missing:** a slot with no grid block in it (the chain made no block, or the
   slot is before the chain started), and a slot whose block has no native USD price (for
   example before the anchor basket launched). Nothing is interpolated or invented. PBaaS
-  coins get `null` in filled samples: the fill reads only the main chain. The baskets are
+  coins get `null` in filled samples: the fill reads only the main chain, so PBaaS coins
+  have history from live samples only. The baskets are
   those of the current basket list; a basket that closed since then is not in a filled
   sample.
-- **Load:** one call at a time, a 1 s pause before each call after the first, responses
-  of about 256 KB (measured: at most 292 KB; the number of blocks per call depends on the
-  number of reserves of the basket), and at most 1,500 calls per run. The fill starts no
-  call while a publish cycle runs, and a cycle never waits for the fill. (A fill call
-  that was sent just before a cycle starts can still be in progress at the daemon.) A
-  failed call or the call limit stops the run with one log line. Publishing goes on, and
-  the fill is off until the next start, which tries again. Costs: see
-  [Node load](#node-load-measured).
+- **Load:** one call at a time. The first call of a run reads 4 states; each next call
+  is sized from the time per state of the last call to take about 1 s, and to at most
+  about 256 KB (the number of states per call also depends on the number of reserves of
+  the basket). Before each call after the first, the fill waits max(1 s, 2 × the last
+  call's time). A call over 5 s halves the size of the next call; a one-state call over
+  5 s ends the run. After 1,500 calls a run waits 60 minutes (one log line) and then goes
+  on by itself. The fill starts no call while a publish cycle runs, and a cycle never
+  waits for the fill (a fill call that was sent just before a cycle starts can still be
+  in progress at the daemon). A failed call ends the run with one log line. Publishing
+  goes on, and the fill is off until the next start, which tries again.
 - **Crash safety:** the fill writes its samples after each part of about 240 grid blocks,
   atomically, through the same write queue as the live samples. A crash leaves valid
   files, and the next start fills only what is still missing.
@@ -684,20 +716,26 @@ Tested on 2026-11-20 and 2026-11-21:
   failed cycle, bad saved files; history fill against a fake daemon: a first start and a
   gap with the call count, a slot without a block, a failed call, the fill turned off, no
   fill call during a cycle, grid estimates that miss, a chain that starts in the middle of
-  a day, a basket that was not live at a past height, and a cycle that does not wait for a
-  fill write).
-- History fill on a live VRSCTEST daemon (91 baskets), through a counting proxy, with the
-  real clock. From an empty folder: 977 calls, 18.4 min, all 670 missing slots filled (the
-  hour, day and week files: 168, 400 and 105 samples, no gap). Then the 24 hourly samples
-  of 2026-11-19 and its daily sample were deleted from a copy of the files, and the
-  service started again: 95 calls, 104 s, all 25 slots filled. Nine filled samples (three
-  per file) were checked by hand against a direct `getcurrencystate` read at the same
-  height: VRSCTEST, DAI.vETH, Bridge.vETH, vETH and MKR.vETH were equal to 6 significant
-  digits. Two live samples were rebuilt from `getcurrencystate` at their own heights for
-  all 91 baskets: all 110 prices were equal to the live samples.
-- `getcurrencystate` on a VRSC mainnet daemon: a first-start fill was stopped after its
-  second call, because that call (152 block states of Bridge.vETH) took 10.1 s. Single
-  calls with 1, 10 and 40 states took 0.15, 0.6 to 0.7 and 2.0 s.
+  a day, a basket that was not live at a past height, a cycle that does not wait for a
+  fill write, the call size from the measured time per state (slow and fast daemon), the
+  pause from the last call's time, a slow call that halves the size, the 60-minute wait
+  after 1,500 calls, the fill windows per file, and bad fill settings).
+- History fill with the default windows, through a counting proxy, with the real clock, on
+  a VRSC mainnet daemon (`"auto"`, 27 baskets, and a fixed list of 4) and a VRSCTEST
+  daemon (91 baskets). The calls, times and sizes are in [Node load](#node-load-measured).
+  From an empty folder, all 195 missing slots were filled (hour, day and week files: 48, 45
+  and 105 samples, no gap, no sample outside its slot). After the 24 hourly samples and
+  the daily sample of 2026-11-20 were deleted from a copy of the files, a restart filled
+  all 25 slots. Hand check, VRSC: nine filled samples (three per file) against a direct
+  `getcurrencystate` read of Bridge.vETH at the same height: VRSC, Bridge.vETH, DAI.vETH
+  and MKR.vETH were equal to 6 significant digits. On both daemons the basket states did
+  not change in the hour and day windows (VRSC after height 4163338, VRSCTEST after
+  1194593), so those checks do not tell near heights apart; the week checks do (VRSC was
+  4.13862 USD in 2024-11, 1.09211 in 2025-11 and 0.636937 in 2026-11). Overlap, VRSC: the
+  live hour sample at height 4331627, rebuilt from `getcurrencystate` at that height for
+  all 27 baskets: all 38 prices were equal to the live sample. The earlier VRSCTEST checks
+  (another build of the fill, the same price code) were also equal: nine hand-checked
+  samples, and 110 of 110 prices in two rebuilt live samples.
 - Price history on a live VRSCTEST daemon with a shifted clock: a test runner (not part of
   the service) shifted the clock and the block-header time by the same offset, so that a
   slot boundary came 90 s after the start. Heights, hashes and basket states were live.
@@ -760,9 +798,10 @@ Tested on 2026-11-20 and 2026-11-21:
   chain, vDEX prices (its public API did not answer during the tests), the systemd unit, the Linux
   `--network host` Docker command, the nginx and Caddy snippets, a history run over days
   with the real clock, a real `blocknotify=` line in a daemon config (the notification
-  was sent by a test harness), ZMQ from a container, ZMQ on a VRSC mainnet daemon, a
-  complete history fill on a VRSC mainnet daemon, the history fill with PBaaS chains, a
-  crash (kill) during a fill write.
+  was sent by a test harness), ZMQ from a container, ZMQ on a VRSC mainnet daemon, the
+  history fill with PBaaS chains, a crash (kill) during a fill write, the 60-minute wait
+  after 1,500 calls on a real daemon (no measured run came near 1,500 calls), a fill
+  over a period where the basket states change from hour to hour.
 
 Known limits:
 
