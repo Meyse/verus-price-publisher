@@ -728,12 +728,11 @@ Tested on 2026-11-20 and 2026-11-21:
   the daily sample of 2026-11-20 were deleted from a copy of the files, a restart filled
   all 25 slots. Hand check, VRSC: nine filled samples (three per file) against a direct
   `getcurrencystate` read of Bridge.vETH at the same height: VRSC, Bridge.vETH, DAI.vETH
-  and MKR.vETH were equal to 6 significant digits. On both daemons the basket states did
-  not change in the hour and day windows (VRSC after height 4163338, VRSCTEST after
-  1194593), so those checks do not tell near heights apart; the week checks do (VRSC was
-  4.13862 USD in 2024-11, 1.09211 in 2025-11 and 0.636937 in 2026-11). Overlap, VRSC: the
-  live hour sample at height 4331627, rebuilt from `getcurrencystate` at that height for
-  all 27 baskets: all 38 prices were equal to the live sample. The earlier VRSCTEST checks
+  and MKR.vETH were equal to 6 significant digits. The checked hour and day samples had
+  equal prices at near heights, so those checks do not prove the choice of height; the
+  week checks do (three samples a year apart, with a different price at each). Overlap,
+  VRSC: one live hour sample, rebuilt from `getcurrencystate` at its height for all 27
+  baskets: all 38 prices were equal to the live sample. The earlier VRSCTEST checks
   (another build of the fill, the same price code) were also equal: nine hand-checked
   samples, and 110 of 110 prices in two rebuilt live samples.
 - Price history on a live VRSCTEST daemon with a shifted clock: a test runner (not part of
