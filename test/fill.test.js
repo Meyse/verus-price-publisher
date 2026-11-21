@@ -13,6 +13,7 @@ const HOUR14 = 1795183200; // 2026-11-20 14:00 UTC, a Friday (see test/history.t
 const BRIDGE = 'i3f7tSctFkiPpiedY8QR5Tep9p4qDVebDx'; // Bridge.vETH, the anchor basket
 const PURE = 'iHax5qYQGbcMGqJKKrPorpzUBX2oFFXGnY';
 const SWITCH = 'i4Xr5TAMrDTD99H69EemhjDxJ4ktNskUtc';
+const KAIJU = 'i9kVWKU2VwARALpbXn4RS9zvrhvNRaUibb';
 const MONDAY = 1794787200; // 2026-11-16 00:00 UTC
 // Worked example (test/prices.test.js): VRSC = 11.76339915 / 18.46869061 = 0.636937365967.
 // With VRSC at 36.93738122 in Bridge.vETH: 11.76339915 / 36.93738122 = 0.318468682984.
@@ -45,8 +46,11 @@ async function service(t, daemon, env = {}, file = {}) {
 }
 
 const fillCalls = (daemon) => daemon.requests.filter((r) => r.method === 'getcurrencystate');
+const states = (call) => { const [a, b, step] = call.params[1].split(',').map(Number); return (b - a) / step + 1; };
+// Basket id -> the number of states of each of its calls, in order.
+const perBasket = (calls) => calls.reduce((out, c) => ({ ...out, [c.params[0]]: [...(out[c.params[0]] ?? []), states(c)] }), {});
 
-test('history fill: first start and a gap after a restart are filled from past states, one call per basket', async (t) => {
+test('history fill: first start and a gap after a restart are filled from past states, a small first call per basket', async (t) => {
   const daemon = await fakeDaemon();
   t.after(() => daemon.server.close());
   // The chain starts at 10:59:30; a block every 60 s, but none from 16:00 to 18:00.
@@ -73,13 +77,14 @@ test('history fill: first start and a gap after a restart are filled from past s
   assert.deepEqual((await off.file('hour')).time, [HOUR14]);
   assert.equal(fillCalls(daemon).length, 0);
 
-  // First start, empty history: the first call of a run is small (4 states); then one
-  // call maps time to height, and one call per basket (a fast daemon: the size limit).
+  // First start, empty history: the first call on each basket is small (4 states); a fast
+  // daemon then gets the rest of a range in one call (the size limit). The anchor basket
+  // first maps time to height (grid step 2), then reads the hour grid (step 15).
   const s = await service(t, daemon);
   await (await s.start(HOUR14 + 600)).tick();
   await s.publisher.fill.running;
-  assert.equal(fillCalls(daemon).length, 2 + 4); // 4 local baskets in the fixture
-  assert.deepEqual(s.sleeps, [1000, 1000, 1000, 1000, 1000]); // a pause before each call after the first
+  assert.deepEqual(perBasket(fillCalls(daemon)), { [BRIDGE]: [4, 91, 13], [PURE]: [4, 5], [KAIJU]: [4, 5], [SWITCH]: [4, 5] });
+  assert.deepEqual(s.sleeps, Array(8).fill(1000)); // a pause before each call after the first
 
   // The service stops at 14:10 and starts again at 20:10.
   daemon.height = 430; // 20:09:30
@@ -87,7 +92,8 @@ test('history fill: first start and a gap after a restart are filled from past s
   const before = fillCalls(daemon).length;
   await (await s.start(HOUR14 + 6 * H + 600)).tick();
   await s.publisher.fill.running;
-  assert.equal(fillCalls(daemon).length - before, 1 + 4); // the small first call, then one per basket
+  // A new run: again a small first call on each basket, then the rest of the gap in one call.
+  assert.deepEqual(perBasket(fillCalls(daemon).slice(before)), { [BRIDGE]: [4, 18], [PURE]: [4, 9], [KAIJU]: [4, 9], [SWITCH]: [4, 9] });
   const hour = await s.file('hour');
   // 16:00 and 17:00 have no block: they stay missing. No value is invented.
   assert.deepEqual(hour.time, [11, 12, 13, 14, 15, 18, 19, 20].map((h) => HOUR14 + (h - 14) * H));
@@ -218,6 +224,36 @@ test('history: a live cycle with no new slot does not wait behind a fill write',
   assert.deepEqual(await Promise.race([history.record(sample(HOUR14 + 60), HOUR14 + 60), waited]), []);
   release();
   await write;
+});
+
+test('history fill: each basket has its own call size: small calls on a slow basket, large on fast ones', async (t) => {
+  const daemon = await fakeDaemon();
+  t.after(() => daemon.server.close());
+  const G = HOUR14 - 60 * 24 * H; // a chain of 60 days, a block every 60 s
+  daemon.blockTime = (h) => G + 60 * h;
+  daemon.height = 60 * 24 * 60 + 10; // 14:10
+  const s = await service(t, daemon);
+  // Bridge.vETH costs 50 ms per state, the other baskets 1 ms (the clock moves while it answers).
+  const cost = (id) => (id === BRIDGE ? 50 : 1);
+  const calls = [];
+  daemon.onRange = (n, id) => { calls.push({ id, n, ms: n * cost(id) }); s.clock += (n * cost(id)) / 1000; };
+  await (await s.start(HOUR14 + 600)).tick();
+  await s.publisher.fill.running;
+  assert.deepEqual(s.logs.filter((l) => l.startsWith('error')), []);
+  const ids = [BRIDGE, PURE, KAIJU, SWITCH];
+  for (const id of ids) {
+    const own = calls.filter((c) => c.id === id);
+    assert.equal(own[0].n, 4, id); // the first call on each basket is small
+    // After the first call on a basket, no call is sized over 1 s of that basket's time.
+    assert.ok(own.slice(1).every((c) => c.ms <= 1000), `${id}: ${own.map((c) => c.ms).join(',')}`);
+  }
+  // 1 s / 50 ms = 20 states per call on Bridge.vETH; the fast baskets get far larger calls
+  // (up to the size limit), so they need few calls.
+  const largest = (id) => Math.max(...calls.filter((c) => c.id === id).map((c) => c.n));
+  assert.equal(largest(BRIDGE), 20);
+  for (const id of [PURE, KAIJU, SWITCH]) assert.ok(largest(id) > 100, `${id}: ${largest(id)}`);
+  const count = (id) => calls.filter((c) => c.id === id).length;
+  assert.ok([PURE, KAIJU, SWITCH].every((id) => count(id) * 4 < count(BRIDGE)), ids.map(count).join(','));
 });
 
 test('history fill: calls sized by the measured time per state, pauses by the last call, windows per file, the call cap waits', async (t) => {

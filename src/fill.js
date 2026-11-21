@@ -11,8 +11,9 @@
 // a day or a week (from the known block times).
 //
 // Load: one call at a time, and no call starts while a publish cycle runs. Each call is
-// sized from the measured time per state of the last call, to about TARGET_MS, and to at
-// most about RESPONSE_BYTES; the first call of a run reads FIRST_STATES states. Before each
+// sized from the measured time per state of the last call on the same basket (the baskets
+// cost very different times per state), to about TARGET_MS, and to at most about
+// RESPONSE_BYTES; the first call on each basket in a run reads FIRST_STATES states. Before each
 // call after the first, a pause of max(PAUSE_MS, 2 x the last call's time): the fill keeps
 // the daemon at most about one third busy. After MAX_CALLS calls the run waits CAP_WAIT_MS
 // and goes on. A call over SLOW_MS halves the size; a one-state call over SLOW_MS, or a
@@ -155,7 +156,7 @@ export class HistoryFill {
     };
     this.stats = stats;
     this.batch = 0; // calls since the last cap wait
-    this.size = FIRST_STATES; // states for the next call (the cost per state is not known yet)
+    this.sizes = new Map(); // basket id -> states for its next call (first call: FIRST_STATES)
     this.lastMs = 0;
     const count = (list) => RESOLUTIONS.map((r) => `${r} ${list.filter((m) => m.resolution === r).length}`).join(', ');
     this.log('info', `history fill: ${missing.length} slots missing (${count(missing)}); reading past basket states`);
@@ -200,7 +201,7 @@ export class HistoryFill {
   }
 
   // One getcurrencystate call of `states` states: a pause before it (not before the first),
-  // and never while a publish cycle runs. Then the size of the next call.
+  // and never while a publish cycle runs. Then the size of the next call on the same basket.
   async call(id, range, states) {
     if (this.stopped) throw STOP;
     if (this.batch >= this.maxCalls) {
@@ -226,9 +227,9 @@ export class HistoryFill {
     this.lastMs = ms;
     if (ms > SLOW_MS) {
       if (states <= 1) throw new Error(`one state took ${ms} ms`);
-      this.size = Math.max(1, Math.floor(states / 2));
+      this.sizes.set(id, Math.max(1, Math.floor(states / 2)));
     } else {
-      this.size = ms > 0 ? Math.max(1, Math.floor((TARGET_MS * states) / ms)) : Infinity;
+      this.sizes.set(id, ms > 0 ? Math.max(1, Math.floor((TARGET_MS * states) / ms)) : Infinity);
     }
     return result;
   }
@@ -239,7 +240,7 @@ export class HistoryFill {
     const limit = Math.max(1, Math.floor(RESPONSE_BYTES / entryBytes(def)));
     const out = new Map();
     for (let from = start, per; from <= end; from += per * step) {
-      per = Math.min(limit, this.size);
+      per = Math.min(limit, this.sizes.get(def.currencyid) ?? FIRST_STATES);
       const to = Math.min(end, from + (per - 1) * step);
       const result = await this.call(def.currencyid, `${from},${to},${step}`, Math.floor((to - from) / step) + 1);
       const expected = Math.floor((to - from) / step) + 1;

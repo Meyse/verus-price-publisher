@@ -15,8 +15,8 @@ of wallets.
   mainnet that is about 1,780 calls per hour, or about 400 with a fixed list of 4
   baskets. Missing history slots (after a stop, or at the first start) are filled from
   the chain's past basket states, one call at a time, with the daemon busy at most about
-  one third of the time. On VRSC mainnet a first start took 172 calls and 109 s of daemon
-  time over 400 s; a one-day gap took 46 calls and 26 s. See
+  one third of the time. On VRSC mainnet a first start took 214 calls and 110 s of daemon
+  time over 418 s; a one-day gap took 78 calls and 26 s. See
   [Node load](#node-load-measured).
 - **How to install:** a git clone and a systemd unit, or a Docker image. See
   [Install](#install). Nothing to change in the daemon's config.
@@ -112,7 +112,8 @@ already computed. Their only cost is one small file write per slot (24 hourly, 1
 at most 1 weekly write per day).
 
 The [history fill](#history-fill) reads missing slots with `getcurrencystate`, one call
-at a time. Each call is sized to take the daemon about 1 s, and before each call the fill
+at a time. Each call is sized to take the daemon about 1 s, from the time per state of
+the same basket, and before each call the fill
 waits at least twice as long as the last call took, so it keeps the daemon at most about
 one third busy. No fill call starts during a cycle. Measured with the default fill
 windows (2 days of hours, 45 days of days, 730 days of weeks), through a counting proxy:
@@ -122,28 +123,28 @@ basket: on VRSC, Bridge.vETH is the most costly.
 
 | Chain | Baskets | Per basket: min / median / max | Average in a first start |
 |---|---|---|---|
-| VRSC | 27 (`"auto"`) | 0.24 / 1.2 / 57 ms | 8.4 ms |
-| VRSCTEST | 91 (`"auto"`) | 0.14 / 0.34 / 7.1 ms | 0.75 ms |
+| VRSC | 27 (`"auto"`) | 0.34 / 1.1 / 57 ms | 8.5 ms |
+| VRSCTEST | 91 (`"auto"`) | 0.13 / 0.35 / 7.0 ms | 0.78 ms |
 
 Fill runs. "First start" is an empty `outDir` (195 slots: 47 hours, 44 days, 104 weeks).
 "One-day gap" is a restart after the 24 hourly samples and the daily sample of
 2026-11-20 were deleted from the files (25 slots). "Daemon busy" is daemon time divided by
 wall time.
 
-| Run | Calls | States | Daemon time | Wall time | Daemon busy | Longest call | Largest response |
-|---|---|---|---|---|---|---|---|
-| VRSC first start, `"auto"` (27 baskets) | 172 | 12,967 | 109 s | 400 s | 27 % | 4.1 s | 290 KB |
-| VRSC first start, fixed list of 4 baskets | 60 | 2,037 | 58 s | 178 s | 33 % | 3.5 s | 283 KB |
-| VRSC one-day gap, `"auto"` | 46 | 2,625 | 26 s | 96 s | 27 % | 2.5 s | 290 KB |
-| VRSCTEST first start, `"auto"` (91 baskets) | 356 | 43,444 | 34 s | 394 s | 9 % | 0.9 s | 292 KB |
-| VRSCTEST one-day gap, `"auto"` | 96 | 8,923 | 8 s | 104 s | 8 % | 0.7 s | 292 KB |
+| Run | Calls | States | Daemon time | Wall time | Daemon busy | Longest call | Calls over 2 s | Largest response |
+|---|---|---|---|---|---|---|---|---|
+| VRSC first start, `"auto"` (27 baskets) | 214 | 12,965 | 110 s | 418 s | 26 % | 2.8 s | 6 | 290 KB |
+| VRSC first start, fixed list of 4 baskets | 66 | 2,041 | 59 s | 181 s | 33 % | 2.8 s | 3 | 247 KB |
+| VRSC one-day gap, `"auto"` | 78 | 2,625 | 26 s | 120 s | 22 % | 1.0 s | 0 | 285 KB |
+| VRSCTEST first start, `"auto"` (91 baskets) | 438 | 43,352 | 34 s | 477 s | 7 % | 0.9 s | 0 | 292 KB |
+| VRSCTEST one-day gap, `"auto"` | 188 | 8,833 | 10 s | 198 s | 5 % | 0.6 s | 0 | 292 KB |
 
 In every run, no call failed, no call took over 5 s, and every slot in the windows was
-filled. The response sizes are on the wire. The calls are sized from the time per state
-of the last call, and the baskets have different costs: a size from a cheap basket gives
-a longer call on a costly one (on VRSC, 11 of 172 calls took over 2 s). History file
-sizes after a first start (hour, day, week): VRSC `"auto"` 21, 20 and 39 KB (gzip 2.6,
-2.7 and 13.5 KB); VRSC with 4 baskets 7, 7 and 14 KB; VRSCTEST 64, 61 and 109 KB (gzip
+filled. The response sizes are on the wire. Each basket has its own call size, from the
+time per state of its own last call, and its first call in a run reads 4 states. In one
+basket, the measured time per state was larger at newer heights, so a size from a call on
+older heights can still give a call of more than 1 s. History file sizes after a first
+start (hour, day, week): VRSC `"auto"` 21, 20 and 39 KB (gzip 2.6, 2.7 and 13.6 KB); VRSC with 4 baskets 7, 7 and 14 KB; VRSCTEST 64, 61 and 109 KB (gzip
 7.5, 7.5 and 25.5 KB).
 
 ### Basket list
@@ -612,9 +613,9 @@ one basket at every step-th block, with the block time.
   one grid step after the first block of the slot. A day or week slot inside a finer grid
   uses that grid (a missing day whose first hour is also missing is filled from the hour
   grid). `height` and `blockTime` are those of the grid block. Measured after a first
-  start: hour samples a median of 7 min (VRSCTEST) and 8 min (VRSC) after the slot start,
-  at most 30 min; day samples 10 to 12 h after the slot start; week samples a median of
-  15 h (VRSCTEST) and 81 h (VRSC) after the slot start, at most 84 h. The grid starts at a
+  start: hour samples a median of 6 min after the slot start (both chains), at most 34
+  min; day samples 10 to 12 h after the slot start; week samples a median of 15 h
+  (VRSCTEST) and 76 h (VRSC) after the slot start, at most 84 h. The grid starts at a
   height estimated from the known blocks around the missing slots. So a later fill of the
   same slot can use a different grid block (seen on VRSC: one block earlier, with the same
   prices).
@@ -627,14 +628,14 @@ one basket at every step-th block, with the block time.
   slot is before the chain started), and a slot whose block has no native USD price (for
   example before the anchor basket launched). Nothing is interpolated or invented. PBaaS
   coins get `null` in filled samples: the fill reads only the main chain, so PBaaS coins
-  have history from live samples only. The baskets are
-  those of the current basket list; a basket that closed since then is not in a filled
-  sample.
-- **Load:** one call at a time. The first call of a run reads 4 states; each next call
-  is sized from the time per state of the last call to take about 1 s, and to at most
-  about 256 KB (the number of states per call also depends on the number of reserves of
-  the basket). Before each call after the first, the fill waits max(1 s, 2 × the last
-  call's time). A call over 5 s halves the size of the next call; a one-state call over
+  have history from live samples only. The baskets are those of the current basket
+  list; a basket that closed since then is not in a filled sample.
+- **Load:** one call at a time. The first call on each basket in a run reads 4 states;
+  each next call on that basket is sized from the time per state of its last call to
+  take about 1 s, and to at most about 256 KB (the number of states per call also
+  depends on the number of reserves of the basket). Before each call after the first,
+  the fill waits max(1 s, 2 × the last call's time). A call over 5 s halves the size of
+  the next call on that basket; a one-state call over
   5 s ends the run. After 1,500 calls a run waits 60 minutes (one log line) and then goes
   on by itself. The fill starts no call while a publish cycle runs, and a cycle never
   waits for the fill (a fill call that was sent just before a cycle starts can still be
@@ -717,7 +718,8 @@ Tested on 2026-11-20 and 2026-11-21:
   gap with the call count, a slot without a block, a failed call, the fill turned off, no
   fill call during a cycle, grid estimates that miss, a chain that starts in the middle of
   a day, a basket that was not live at a past height, a cycle that does not wait for a
-  fill write, the call size from the measured time per state (slow and fast daemon), the
+  fill write, the call size from the measured time per state (slow and fast daemon), a
+  call size per basket (one slow basket, fast others), the
   pause from the last call's time, a slow call that halves the size, the 60-minute wait
   after 1,500 calls, the fill windows per file, and bad fill settings).
 - History fill with the default windows, through a counting proxy, with the real clock, on
