@@ -51,6 +51,8 @@ const DEFAULTS = {
   minRouteReserve: 1000,
   history: true,
   historyRetentionDays: { hour: 7, day: 400, week: 0 },
+  historyFill: true,
+  historyFillMaxDays: 730,
   http: null,
 };
 
@@ -134,17 +136,25 @@ function pbaasEntry(raw, i, mainId) {
   };
 }
 
-function historyConfig(merged) {
+const SWITCH = { true: true, false: false, 1: true, 0: false, on: true, off: false };
+
+function historyConfig(merged, env) {
   if (merged.history === false) return null;
   if (merged.history !== true) throw new Error('Config "history" must be true or false');
   const days = { ...DEFAULTS.historyRetentionDays, ...merged.historyRetentionDays };
-  return {
-    retentionDays: {
-      hour: number(days.hour, 'historyRetentionDays.hour', 0),
-      day: number(days.day, 'historyRetentionDays.day', 0),
-      week: number(days.week, 'historyRetentionDays.week', 0),
-    },
+  const retentionDays = {
+    hour: number(days.hour, 'historyRetentionDays.hour', 0),
+    day: number(days.day, 'historyRetentionDays.day', 0),
+    week: number(days.week, 'historyRetentionDays.week', 0),
   };
+  const fill = env.HISTORY_FILL === undefined ? merged.historyFill : SWITCH[env.HISTORY_FILL.trim().toLowerCase()];
+  if (typeof fill !== 'boolean') throw new Error('Config "historyFill" (HISTORY_FILL) must be true or false');
+  const maxDays = number(merged.historyFillMaxDays, 'historyFillMaxDays', 0);
+  // The fill window of a file: its retention, but at most historyFillMaxDays (also for
+  // a file without a limit).
+  const windowDays = Object.fromEntries(Object.entries(retentionDays)
+    .map(([resolution, d]) => [resolution, d > 0 ? Math.min(d, maxDays) : maxDays]));
+  return { retentionDays, fill: fill ? { windowDays } : null };
 }
 
 /**
@@ -218,7 +228,7 @@ export function loadConfig({ configPath, chain, env = process.env } = {}) {
     basketListMs: number(merged.basketListSeconds, 'basketListSeconds', 60) * 1000,
     maxAgeSeconds: number(merged.maxAgeSeconds, 'maxAgeSeconds', 60),
     minRouteReserve: String(number(merged.minRouteReserve, 'minRouteReserve', 0)),
-    history: historyConfig(merged),
+    history: historyConfig(merged, env),
     http,
   };
 }

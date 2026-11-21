@@ -4,7 +4,8 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { writeFileAtomic } from './files.js';
-import { History } from './history.js';
+import { HistoryFill } from './fill.js';
+import { History, MAX_CLOCK_SKEW } from './history.js';
 import { computePrices } from './prices.js';
 import { format } from './decimal.js';
 
@@ -27,8 +28,12 @@ export class Publisher {
    * @param {object} [options]
    * @param {(level: string, message: string) => void} [options.log]
    * @param {() => number} [options.now] milliseconds
+   * @param {(ms: number) => Promise<void>} [options.sleep] the pause between fill calls
+   * @param {boolean} [options.fill] false: no history fill (--once)
    */
-  constructor(config, { log = () => {}, now = Date.now } = {}) {
+  constructor(config, {
+    log = () => {}, now = Date.now, sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }), fill = true,
+  } = {}) {
     this.config = config;
     this.log = log;
     this.now = now;
@@ -49,6 +54,24 @@ export class Publisher {
       log,
     }) : null;
     this.historyFailing = false;
+    this.busy = null; // a promise while a check or cycle runs
+    this.lastBaskets = null; // basket definitions of the last cycle
+    this.fill = this.history && config.history.fill && fill ? new HistoryFill({
+      history: this.history,
+      rpc: config.chain.rpc,
+      chain: config.chain,
+      minRouteReserve: config.minRouteReserve,
+      windowDays: config.history.fill.windowDays,
+      log,
+      now,
+      sleep,
+      idle: () => this.idle(),
+    }) : null;
+  }
+
+  // Resolves when no check or cycle runs (the fill waits for this before each call).
+  async idle() {
+    while (this.busy) await this.busy;
   }
 
   // Serve the file of an earlier run (same schema and chain) and do not
@@ -61,6 +84,7 @@ export class Publisher {
         // Never overwrite a file that could not be read: history stays off for this run.
         this.log('error', `history: cannot read the files, history is off until a restart: ${error.message}`);
         this.history = null;
+        this.fill = null;
       }
     }
     try {
@@ -92,8 +116,19 @@ export class Publisher {
   // Then poll, and run a cycle when the best block changed. Never throws (except for a
   // wrong chain); a failure keeps the last file.
   async tick({ force = false } = {}) {
-    const { rpc } = this.config.chain;
     if (!force && !this.cycleAllowed()) return false;
+    let done;
+    this.busy = new Promise((resolve) => { done = resolve; });
+    try {
+      return await this.check(force);
+    } finally {
+      this.busy = null;
+      done();
+    }
+  }
+
+  async check(force) {
+    const { rpc } = this.config.chain;
     try {
       await this.verifyChain(this.config.chain);
       const hash = await rpc.call('getbestblockhash');
@@ -110,6 +145,7 @@ export class Publisher {
       this.body = body;
       this.lastHash = hash;
       await this.recordHistory(doc);
+      this.startFill(doc);
       // Calls of this cycle per RPC server (the poll that found the block is not included).
       const calls = Object.fromEntries(clients.map((client) => [client.label, client.resetCounts()]));
       if (this.failing) this.log('info', 'RPC is back; publishing again');
@@ -138,6 +174,17 @@ export class Publisher {
       if (!this.historyFailing) this.log('error', `history: cannot write: ${error.message}`);
       this.historyFailing = true;
     }
+  }
+
+  // Fill missing history slots in the background, after a cycle whose block is current.
+  startFill(doc) {
+    if (!this.fill || this.historyFailing || !this.lastBaskets) return;
+    if (!(Math.abs(doc.generatedAt - doc.blockTime) <= MAX_CLOCK_SKEW)) return; // the daemon may still sync
+    this.fill.start({
+      defs: this.lastBaskets,
+      bridges: this.bridgeList?.map ?? new Map(),
+      tip: { height: doc.height, time: doc.blockTime },
+    });
   }
 
   async verifyChain(chain) {
@@ -224,6 +271,7 @@ export class Publisher {
   async cycle(hash) {
     const { chain } = this.config;
     const main = await this.readChain(chain, hash, [chain.anchorBasket]);
+    this.lastBaskets = main.baskets;
     // A PBaaS chain's coin is priced only by its own bridge basket on its own chain.
     // On the main chain that basket is an imported copy and is not read, so the main
     // chain gives these coins no price.

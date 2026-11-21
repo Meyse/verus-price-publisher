@@ -11,7 +11,11 @@ const ALLOWED_METHODS = new Set([
   'getblockheader',
   'getcurrency',
   'listcurrencies',
+  'getcurrencystate', // only the range form, see call()
 ]);
+
+// getcurrencystate is allowed only as (currency id, "start,end,step") with block heights.
+const RANGE = /^\d{1,10},\d{1,10},\d{1,10}$/;
 
 export class RpcError extends Error {}
 
@@ -61,6 +65,10 @@ export class RpcClient {
   async call(method, params = []) {
     if (!ALLOWED_METHODS.has(method)) {
       throw new RpcError(`RPC method "${method}" is not on the read-only allow-list`);
+    }
+    if (method === 'getcurrencystate'
+      && !(params.length === 2 && typeof params[0] === 'string' && RANGE.test(params[1]))) {
+      throw new RpcError('getcurrencystate: only the range form (currency id, "start,end,step") is allowed');
     }
     this.counts[method] = (this.counts[method] ?? 0) + 1;
     const headers = { 'content-type': 'application/json' };

@@ -15,7 +15,8 @@ async function setup(t, env = {}) {
   const daemon = await fakeDaemon();
   t.after(() => daemon.server.close());
   const dir = await mkdtemp(join(tmpdir(), 'vpp-loop-'));
-  const config = loadConfig({ chain: 'VRSC', env: { VERUS_RPC_URL: `http://127.0.0.1:${daemon.port}`, OUT_DIR: dir, ...env } });
+  // These tests count poll calls: the history fill (a separate load, test/fill.test.js) is off.
+  const config = loadConfig({ chain: 'VRSC', env: { VERUS_RPC_URL: `http://127.0.0.1:${daemon.port}`, OUT_DIR: dir, HISTORY_FILL: '0', ...env } });
   const s = { daemon, config, clock: T, timers: [], published: [] };
   s.publisher = new Publisher(config, {
     now: () => s.clock,

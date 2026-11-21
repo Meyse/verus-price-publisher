@@ -9,11 +9,13 @@ of wallets.
 - **What it needs:** one VRSC daemon on the same machine and Node.js 20 or newer. It needs
   no PBaaS node: the coins of vARRR, CHIPS and vDEX come from the public APIs of those
   chains (built in, off by default). No runtime dependencies, no build step.
-- **What it costs the node:** read-only RPC (an allow-list of five methods). Each new block
+- **What it costs the node:** read-only RPC (an allow-list of six methods). Each new block
   costs 1 `getblockheader` and 1 `getcurrency` per basket. Each poll costs 1
   `getbestblockhash`, and no poll calls the daemon in the 60 s after a cycle. On VRSC
-  mainnet that is about 1,780 calls per hour, or about 400 with a fixed
-  list of 4 baskets. The price history makes no extra RPC calls. See
+  mainnet that is about 1,780 calls per hour, or about 400 with a fixed list of 4
+  baskets. Missing history slots (after a stop, or at the first start) are filled from
+  the chain's past states with few calls: on VRSCTEST, one call per basket for a day of
+  missing hours. On VRSC mainnet each block state costs the daemon more time. See
   [Node load](#node-load-measured).
 - **How to install:** a git clone and a systemd unit, or a Docker image. See
   [Install](#install). Nothing to change in the daemon's config.
@@ -53,9 +55,9 @@ of wallets.
    (Monday 00:00). The first successful cycle in a new slot adds one sample to that
    slot's file: the slot start, the block height, the block time and the price of each
    currency. Other cycles in the same slot add nothing. Nothing is interpolated.
-   **After downtime nothing is fetched afterwards:** the service reads only the current
-   state, so a slot in which the service did not run, or every cycle failed, stays
-   without a sample.
+   **Missing slots are filled from the chain:** a slot in which the service did not run,
+   or every cycle failed, gets its sample from the chain's past basket states, in the
+   background. See [History fill](#history-fill).
    **The history files roll over:** each file keeps a fixed window
    (`historyRetentionDays`: 7 days hourly, 400 days daily, weekly without a limit), and
    the oldest samples drop off when new ones come in.
@@ -65,7 +67,8 @@ of wallets.
    to `<file>.replaced-<unix time>` (never deleted), a new file starts, and the service
    logs this once. If a file cannot be read at all (for example no permission), the
    service logs an error, keeps publishing `prices.json`, and records no history until a
-   restart, so it never overwrites that file. `--once` also continues the history files.
+   restart, so it never overwrites that file. `--once` also continues the history files
+   (it adds the live sample; it does not fill).
    A failed cycle records nothing. A cycle whose block time is more than
    2 hours from the clock records nothing (the daemon is still syncing, or the clock is
    wrong). If the clock goes back, no sample is added until it passes the last slot.
@@ -103,9 +106,23 @@ Total calls per hour at 1 block per minute (60 cycles), with the default polling
 basket-list refresh also has the `listcurrencies` call (about 0.1 to 0.3 s more). The load
 is the same for 1 wallet or 1 million.
 
-The price history makes **zero extra RPC calls**. It uses the prices that the cycle
-already computed. Its only cost is one small file write per slot (24 hourly, 1 daily and
+Live history samples make **zero extra RPC calls**. They use the prices that the cycle
+already computed. Their only cost is one small file write per slot (24 hourly, 1 daily and
 at most 1 weekly write per day).
+
+The [history fill](#history-fill) reads missing slots with `getcurrencystate`, one call
+at a time with a 1 s pause, never during a cycle. Measured on VRSCTEST (91 baskets):
+
+| Missing | Calls | Time | Data read | Largest response | Daemon time per call |
+|---|---|---|---|---|---|
+| Everything (first start, empty history): 670 slots | 977: 1 to map time to height, then 8 to 21 per basket | 18.4 min | 183 MB (about 1,560 block states per basket) | 292 KB | at most 1.0 s |
+| One day: 24 hourly slots and 1 daily slot | 95: 1 per basket, 2 for the 4 baskets with 8 reserves | 104 s | 11.5 MB | 292 KB | at most 0.8 s |
+
+On VRSCTEST a call costs the daemon about 1 ms per block state (118 s of daemon time for
+the 142,216 states of the first start). On a VRSC mainnet
+daemon it costs about 50 to 70 ms per block state, at any spacing: 10 states took 0.6 to
+0.7 s, 40 states 2.0 s, and 152 states (one call of the hourly grid for Bridge.vETH)
+10.1 s.
 
 ### Basket list
 
@@ -297,13 +314,16 @@ the defaults.
 | `minRouteReserve` | 1000 | Minimum native reserve (in native coins, for example VRSC) of a basket that sets the price of a reserve currency (price rule 4). `0` turns it off. |
 | `history` | `true` | Keep the price history files under `<outDir>/v1/history/`. `false` turns it off. |
 | `historyRetentionDays` | `{ "hour": 7, "day": 400, "week": 0 }` | How many days of samples each history file keeps. Older samples are removed. `0` = no limit. |
+| `historyFill` | `true` | Fill missing history slots from the chain's past states (see [History fill](#history-fill)). `false` turns it off. |
+| `historyFillMaxDays` | 730 | How far back the fill goes, in days, in any file. It sets the fill window of the weekly file (no retention limit); the hourly and daily files are filled over their retention. |
 | `http` | `null` (off) | `{ "host": "127.0.0.1", "port": 8080 }` to serve the files from the service itself. |
 | `pbaas` | `[]` (off) | PBaaS chains. A built-in name (`"vARRR"`, `"CHIPS"`, `"vDEX"`) uses that chain's public API. An object `{ name, id, rpc }` uses another server, for example an own daemon; optional `baskets` (default: only the chain's bridge basket). See [PBaaS chains](#pbaas-chains). `rpc` takes `conf`, `url`, `timeoutSeconds` as for the main chain. |
 
 Environment variables: `VERUS_CHAIN`, `VERUS_RPC_CONF`, `VERUS_RPC_URL`, `VERUS_RPC_USER`,
 `VERUS_RPC_PASSWORD` (main chain only; the user and password override the conf file),
-`OUT_DIR`, `HTTP_PORT`, `HTTP_HOST`, `BLOCK_NOTIFY_ZMQ`, `BLOCK_NOTIFY_FILE`, and `VERUS_PBAAS` (built-in
-PBaaS names, comma-separated, used when the config file has no `pbaas`).
+`OUT_DIR`, `HTTP_PORT`, `HTTP_HOST`, `BLOCK_NOTIFY_ZMQ`, `BLOCK_NOTIFY_FILE`, `HISTORY_FILL`
+(`0` or `1`; overrides `historyFill`), and `VERUS_PBAAS` (built-in PBaaS names,
+comma-separated, used when the config file has no `pbaas`).
 
 ### PBaaS chains
 
@@ -534,16 +554,66 @@ For wallet and app developers:
   rules gave it no price at that time (for example a basket under `minRouteReserve`).
   Draw a gap. Do not draw it as 0.
 - A missing slot is a step in `time` that is larger than the resolution (3,600, 86,400 or
-  604,800 seconds). The service was not running, or its cycles failed. The file does not
-  fill such slots. Show a gap, or join the points and mark the gap.
-- A sample is taken at the first cycle in its slot. Usually that is the first block after
-  the slot start. After a start or an outage it can be later in the slot. `blockTime`
-  shows when the price was read.
+  604,800 seconds). The chain has no usable block for it (see
+  [History fill](#history-fill)), or the fill has not run yet. Show a gap, or join the
+  points and mark the gap.
+- A live sample is taken at the first cycle in its slot, usually the first block after
+  the slot start. A filled sample is at most one grid step later (see
+  [History fill](#history-fill)). `blockTime` shows when the price was read.
 - All prices are in USD (the `anchor` currency counts as 1 USD). There is no other quote
   currency. To show
   another currency, convert on the client.
 - Check `chain.id` and `anchor` before you use a file.
 - Ask for gzip (`Accept-Encoding: gzip`); most HTTP clients do this by default.
+
+### History fill
+
+When a slot has no sample (the service was stopped, its cycles failed, or it starts with
+no history), the service fills the slot from the chain's own past basket states. It uses
+`getcurrencystate` with a height range (`"start,end,step"`), which returns the state of
+one basket at every step-th block, with the block time.
+
+- **When:** after the first cycle that publishes a block after a start, and after any
+  later cycle when slots are missing (for example after the daemon was down while the
+  service ran). The fill runs in the background. Not with `--once`.
+- **Which slots:** every slot that has ended, in the last `historyRetentionDays` of each
+  file, at most `historyFillMaxDays` (default 730) back. So by default: 7 days of hours,
+  400 days of days, and 730 days of weeks. Only when the block of the cycle is less than
+  2 hours from the clock (the daemon is synced).
+- **Which block:** the fill reads the states on a grid of heights with a fixed step: a
+  quarter of the blocks of an hour (14 blocks at 62 s per block), or half of the blocks of
+  a day (696) or a week (4,877). The sample of a slot is the first grid block (by height)
+  whose block time is at or after the slot start and before the slot end. It is at most
+  one grid step after the first block of the slot. A day or week slot inside a finer grid
+  uses that grid (a day in the last 7 days is filled from the hour grid). `height` and
+  `blockTime` are those of the grid block.Measured on VRSCTEST (670 filled slots): hourly
+  samples a median of 7 min and at most 31 min after the slot start, daily samples 7.2 h
+  and 12.3 h, weekly samples 7.1 h and 3.5 days.
+- **Same prices:** the prices come from the same code as live samples, with the states of
+  all baskets at that one height: the same [price rules](#price-rules), `minRouteReserve`,
+  and local baskets only. With `"auto"`, a basket that was not live at that height
+  (pre-launch, refunding) is left out, as in the live basket list. Filled and live samples
+  have the same form in the files.
+- **What stays missing:** a slot with no grid block in it (the chain made no block, or the
+  slot is before the chain started), and a slot whose block has no native USD price (for
+  example before the anchor basket launched). Nothing is interpolated or invented. PBaaS
+  coins get `null` in filled samples: the fill reads only the main chain. The baskets are
+  those of the current basket list; a basket that closed since then is not in a filled
+  sample.
+- **Load:** one call at a time, a 1 s pause before each call after the first, responses
+  of about 256 KB (measured: at most 292 KB; the number of blocks per call depends on the
+  number of reserves of the basket), and at most 1,500 calls per run. The fill starts no
+  call while a publish cycle runs, and a cycle never waits for the fill. (A fill call
+  that was sent just before a cycle starts can still be in progress at the daemon.) A
+  failed call or the call limit stops the run with one log line. Publishing goes on, and
+  the fill is off until the next start, which tries again. Costs: see
+  [Node load](#node-load-measured).
+- **Crash safety:** the fill writes its samples after each part of about 240 grid blocks,
+  atomically, through the same write queue as the live samples. A crash leaves valid
+  files, and the next start fills only what is still missing.
+- The log has one line when a run starts (the missing slots per file) and one when it
+  ends (filled slots per file, calls, time, largest response, slots that stay missing).
+- `"historyFill": false` or `HISTORY_FILL=0` turns it off.
 
 ## Price rules
 
@@ -578,9 +648,11 @@ come from JSON numbers, so they keep about 15 to 16 significant digits (the daem
 
 ## Security notes
 
-- The RPC client (`src/rpc.js`) has a fixed allow-list: `getblockchaininfo`,
-  `getbestblockhash`, `getblockheader`, `getcurrency`, `listcurrencies`. It refuses every
-  other method before any network request. No wallet method is on the list.
+- The RPC client (`src/rpc.js`) has a fixed allow-list of six methods: `getblockchaininfo`,
+  `getbestblockhash`, `getblockheader`, `getcurrency`, `listcurrencies`, and
+  `getcurrencystate` only in its range form (a currency id and `"start,end,step"` with
+  block heights). It refuses every other method and form before any network request. No
+  wallet method is on the list.
 - Credentials stay inside the RPC client and go only into the `Authorization` header.
   Error messages hold the method name and the daemon's error text, never the request.
   Credentials in `rpc.url` are refused. Redirects are refused. The conf file's credentials
@@ -602,14 +674,30 @@ come from JSON numbers, so they keep about 15 to 16 significant digits (the daem
 
 ## Verification status
 
-Tested on 2026-11-20:
+Tested on 2026-11-20 and 2026-11-21:
 
 - Unit and integration tests: `node --test test/*.test.js` (price math against values
   calculated by hand from recorded basket states, bad data, the allow-list, the
   publish/failure/recovery cycle against a fake daemon, the HTTP server; history: one
   sample per slot, the hour, 00:00 and Monday 00:00 boundaries, retention, restart without
   a duplicate, `null` for a currency that appears or disappears, a changed anchor, a
-  failed cycle, bad saved files).
+  failed cycle, bad saved files; history fill against a fake daemon: a first start and a
+  gap with the call count, a slot without a block, a failed call, the fill turned off, no
+  fill call during a cycle, grid estimates that miss, a chain that starts in the middle of
+  a day, a basket that was not live at a past height, and a cycle that does not wait for a
+  fill write).
+- History fill on a live VRSCTEST daemon (91 baskets), through a counting proxy, with the
+  real clock. From an empty folder: 977 calls, 18.4 min, all 670 missing slots filled (the
+  hour, day and week files: 168, 400 and 105 samples, no gap). Then the 24 hourly samples
+  of 2026-11-19 and its daily sample were deleted from a copy of the files, and the
+  service started again: 95 calls, 104 s, all 25 slots filled. Nine filled samples (three
+  per file) were checked by hand against a direct `getcurrencystate` read at the same
+  height: VRSCTEST, DAI.vETH, Bridge.vETH, vETH and MKR.vETH were equal to 6 significant
+  digits. Two live samples were rebuilt from `getcurrencystate` at their own heights for
+  all 91 baskets: all 110 prices were equal to the live samples.
+- `getcurrencystate` on a VRSC mainnet daemon: a first-start fill was stopped after its
+  second call, because that call (152 block states of Bridge.vETH) took 10.1 s. Single
+  calls with 1, 10 and 40 states took 0.15, 0.6 to 0.7 and 2.0 s.
 - Price history on a live VRSCTEST daemon with a shifted clock: a test runner (not part of
   the service) shifted the clock and the block-header time by the same offset, so that a
   slot boundary came 90 s after the start. Heights, hashes and basket states were live.
@@ -672,7 +760,9 @@ Tested on 2026-11-20:
   chain, vDEX prices (its public API did not answer during the tests), the systemd unit, the Linux
   `--network host` Docker command, the nginx and Caddy snippets, a history run over days
   with the real clock, a real `blocknotify=` line in a daemon config (the notification
-  was sent by a test harness), ZMQ from a container, ZMQ on a VRSC mainnet daemon.
+  was sent by a test harness), ZMQ from a container, ZMQ on a VRSC mainnet daemon, a
+  complete history fill on a VRSC mainnet daemon, the history fill with PBaaS chains, a
+  crash (kill) during a fill write.
 
 Known limits:
 

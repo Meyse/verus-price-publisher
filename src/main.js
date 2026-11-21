@@ -31,7 +31,8 @@ try {
   process.exit(2);
 }
 
-const publisher = new Publisher(config, { log });
+// --once runs one cycle and exits: no history fill.
+const publisher = new Publisher(config, { log, fill: !values.once });
 log('info', `chain ${config.chain.name}, RPC ${config.chain.rpc.label}, output ${publisher.path}`);
 
 await publisher.loadExisting();
@@ -95,6 +96,7 @@ if (config.blockNotifyZmq) {
 const stop = (signal) => {
   log('info', `${signal}: stopping`);
   loop.stop();
+  publisher.fill?.stop();
   zmq?.stop();
   if (notifyFile) unwatchFile(notifyFile);
   if (server) server.close();

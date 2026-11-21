@@ -12,6 +12,8 @@
   "minRouteReserve": 1000,
   "history": true,
   "historyRetentionDays": { "hour": 7, "day": 400, "week": 0 },
+  "historyFill": true,
+  "historyFillMaxDays": 730,
   "http": null,
   "pbaas": []
 }

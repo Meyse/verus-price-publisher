@@ -159,7 +159,7 @@ test('ZMQ with the loop: a message starts one cycle; disconnect falls back to po
   t.after(() => daemon.server.close());
   const peer = await publisherPeer(t);
   const dir = await mkdtemp(join(tmpdir(), 'vpp-zmq-'));
-  const config = loadConfig({ chain: 'VRSC', env: { VERUS_RPC_URL: `http://127.0.0.1:${daemon.port}`, OUT_DIR: dir, BLOCK_NOTIFY_ZMQ: peer.address } });
+  const config = loadConfig({ chain: 'VRSC', env: { VERUS_RPC_URL: `http://127.0.0.1:${daemon.port}`, OUT_DIR: dir, BLOCK_NOTIFY_ZMQ: peer.address, HISTORY_FILL: '0' } });
   assert.deepEqual([config.pollMs, config.safetyPollMs], [30000, 300000]);
 
   const T = 1790000100 * 1000;

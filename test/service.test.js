@@ -22,7 +22,12 @@ test('the RPC client refuses methods outside the read-only allow-list', async (t
   for (const method of ['sendcurrency', 'dumpprivkey', 'z_sendmany', 'getwalletinfo', 'stop', 'signmessage']) {
     await assert.rejects(rpc.call(method), /not on the read-only allow-list/);
   }
+  // getcurrencystate only in the range form (currency id, "start,end,step").
+  for (const params of [['iX'], ['iX', '5'], ['iX', '1,2,3', 'x'], [{ id: 'iX' }, '1,2,3'], ['iX', '1,2,3;stop']]) {
+    await assert.rejects(rpc.call('getcurrencystate', params), /only the range form/);
+  }
   assert.equal(daemon.requests.length, 0);
+  assert.equal((await rpc.call('getcurrencystate', ['Pure', '1,3,1'])).length, 3);
   assert.throws(() => new RpcClient({ url: 'http://user:pass@127.0.0.1:1' }), /not in the URL/);
 });
 
